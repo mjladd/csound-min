@@ -1,0 +1,40 @@
+// Development container for csound-min.
+// Read .devcontainer/README.md for what this gives you and how to hear audio.
+{
+  "name": "csound-min",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+
+  // The engine looks for its loadable back ends in an install directory that
+  // does not exist in a fresh checkout. Point it at the build tree instead.
+  // The csd helper on the PATH renders and plays .csd files.
+  "remoteEnv": {
+    "OPCODE7DIR64": "${containerWorkspaceFolder}/build",
+    "PATH": "${containerWorkspaceFolder}/.devcontainer/bin:${containerWorkspaceFolder}/build:${containerEnv:PATH}"
+  },
+
+  "postCreateCommand": ".devcontainer/postcreate.sh",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "kunstmusik.csound-vscode-plugin"
+      ],
+      "settings": {
+        "cmake.generator": "Ninja",
+        "cmake.buildDirectory": "${workspaceFolder}/build",
+        "cmake.configureArgs": ["-DCMAKE_BUILD_TYPE=Release"],
+        "cmake.sourceDirectory": "${workspaceFolder}",
+        "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+        "files.associations": {
+          "*.csd": "csound-csd",
+          "*.orc": "csound",
+          "*.sco": "csound-sco"
+        }
+      }
+    }
+  }
+}

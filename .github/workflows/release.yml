@@ -1,0 +1,124 @@
+# Packs a downloadable archive for Linux and for macOS, proves that each one
+# runs after extraction, and attaches both to a GitHub release.
+#
+# Push a tag to publish:
+#
+#     git tag -a v7.0.0-min.1 -m "first packaged build"
+#     git push origin v7.0.0-min.1
+#
+# Run the workflow by hand to get the archives as build artifacts without
+# publishing a release.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: linux-x86_64
+    runs-on: ubuntu-latest
+    # The archive is built inside an older distribution, because a program
+    # built against a newer C library does not run on an older one. This
+    # container gives a machine with glibc 2.35 or later.
+    container: ubuntu:22.04
+
+    steps:
+      - name: Install the build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git python3 \
+            build-essential cmake ninja-build pkg-config flex bison \
+            libsndfile1-dev libsamplerate0-dev libcurl4-openssl-dev \
+            libasound2-dev libjack-jackd2-dev libpulse-dev portaudio19-dev
+
+      - uses: actions/checkout@v4
+        with:
+          # package.sh names the archive after the tag, which it reads with
+          # git describe. That needs the whole history.
+          fetch-depth: 0
+
+      - name: Build and pack
+        run: .github/scripts/package.sh
+
+      - name: Prove that the archive runs after extraction
+        run: .github/scripts/verify-package.sh dist/*.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: csound-min-linux-x86_64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  macos:
+    name: macos-arm64
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install the build dependencies
+        run: brew install ninja flex bison libsndfile libsamplerate portaudio
+
+      - name: Build and pack
+        run: .github/scripts/package.sh
+
+      - name: Prove that the archive runs after extraction
+        run: .github/scripts/verify-package.sh dist/*.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: csound-min-macos-arm64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: publish the release
+    needs: [linux, macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write the release notes
+        env:
+          COMMIT: ${{ github.sha }}
+        run: |
+          cat > notes.md <<NOTES
+          Built from $COMMIT.
+
+          Each archive holds the engine, the command line program and the
+          analysis utilities, for one operating system and one processor.
+          Extract it and read README.md inside. You either source env.sh to
+          run the program from the extracted directory, or copy the files
+          into /usr/local.
+
+          This is a personal learning fork of Csound. For a supported build,
+          take a release from https://github.com/csound/csound/releases.
+          NOTES
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l dist
+          gh release create "$TAG" dist/* --title "$TAG" --notes-file notes.md
