@@ -25,6 +25,15 @@ brew install cmake ninja flex bison libsndfile libsamplerate portaudio
 Homebrew keeps its Flex and Bison out of the default path, because macOS ships
 older versions. The top of `CMakeLists.txt` finds the Homebrew copies.
 
+## Where the build is defined
+
+`CMakeLists.txt` at the root is a stub. It exists because CMake reads a
+`CMakeLists.txt` from the directory you pass to `-S`, and it does nothing but
+set the policies and call `add_subdirectory(src)`.
+
+The build is `src/CMakeLists.txt`. Look there for the source lists, the
+options and the install rules.
+
 ## Build it
 
 ```

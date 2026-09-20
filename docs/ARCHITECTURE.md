@@ -13,7 +13,9 @@ Everything the compiler reads lives under `src/`. The top level holds only the
 build entry point, the documentation, and the directories that are not source:
 
 ```
-CMakeLists.txt          the build, and the only CMake file at the root
+CMakeLists.txt          a 25-line stub, only because CMake needs a file
+                        in the directory you configure
+src/CMakeLists.txt      the actual build, 1,546 lines
 src/cmake/              CMake modules and package templates
 src/include/            the public API, installed to include/csound
 src/H/                  private headers
@@ -28,10 +30,17 @@ src/tools/              the prune and render-comparison scripts
 tests/  doc/  samples/
 ```
 
-One consequence worth knowing. `src/include/` is the public API but it does not
-sit at the repository root, which is where most CMake projects put it. The
+Two consequences worth knowing. `src/include/` is the public API but it does
+not sit at the repository root, which is where most CMake projects put it. The
 install path is unchanged, so anything consuming the installed library still
 writes `#include <csound/csound.h>`.
+
+The root `CMakeLists.txt` is a stub. It sets the policies, calls `project()`
+and `enable_testing()`, then calls `add_subdirectory(src)`. Read
+`src/CMakeLists.txt` when you want to know how something is built. Because
+`project()` sits at the root, `Csound_SOURCE_DIR` names the root, so
+`src/CMakeLists.txt` uses `CMAKE_CURRENT_SOURCE_DIR` for its own paths and
+`CMAKE_SOURCE_DIR` for `tests/`, `docs/` and `samples/`.
 
 ## The short version
 
