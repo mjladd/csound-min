@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# csd - build csound-min and run .csd files with it.
+#
+# The helper always uses the csound you just built, and it points the engine
+# at the loadable back ends in the build tree. Run 'csd help' for the
+# subcommands.
+set -euo pipefail
+
+self=$(readlink -f "$0")
+root=$(cd "$(dirname "$self")/../.." && pwd)
+build=${CSOUND_BUILD_DIR:-$root/build}
+renders=$build/renders
+
+usage() {
+    cat <<'TEXT'
+usage: csd <command> [arguments]
+
+  build                      compile the library, the program and the utilities
+  render FILE.csd [OUT.wav]  render to a file, ignoring -odac in the .csd
+  play FILE.csd              render, then play the result
+  live FILE.csd              send the audio straight to the audio device
+  info FILE.wav              print the format, the length and the peak level
+  opcodes [PATTERN]          list the opcodes the build provides
+  difftest                   compare the renders against the recorded baseline
+  help                       print this text
+
+The rendered files go to build/renders. Set CSOUND_BUILD_DIR to use another
+build tree.
+TEXT
+}
+
+need_build() {
+    if [ ! -x "$build/csound" ]; then
+        echo "csd: $build/csound is missing. Building it now." >&2
+        cmd_build
+    fi
+}
+
+cmd_build() {
+    if [ ! -f "$build/CMakeCache.txt" ]; then
+        cmake -S "$root" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release
+    fi
+    ninja -C "$build" "$@"
+}
+
+# Renders to a file. A -o flag on the command line overrides the -odac that
+# most .csd files carry in their own <CsOptions> block.
+render_to() {
+    local input=$1 output=$2
+    need_build
+    mkdir -p "$(dirname "$output")"
+    OPCODE7DIR64=$build "$build/csound" -W -o "$output" "$input"
+}
+
+default_output() {
+    echo "$renders/$(basename "${1%.*}").wav"
+}
+
+cmd_render() {
+    [ $# -ge 1 ] || { usage; exit 2; }
+    local output=${2:-$(default_output "$1")}
+    render_to "$1" "$output"
+    echo "wrote $output"
+}
+
+cmd_play() {
+    [ $# -ge 1 ] || { usage; exit 2; }
+    local output=${2:-$(default_output "$1")}
+    render_to "$1" "$output"
+    play_file "$output"
+}
+
+play_file() {
+    local file=$1
+    local socket=${PULSE_SERVER:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/pulse/native}
+    if [ -S "${socket#unix:}" ] && command -v paplay > /dev/null; then
+        paplay "$file"
+    elif [ -d /dev/snd ] && command -v play > /dev/null; then
+        play -q "$file"
+    elif [ -d /dev/snd ] && command -v aplay > /dev/null; then
+        aplay -q "$file"
+    else
+        echo "csd: this container reaches no audio device, so nothing played." >&2
+        echo "csd: play $file on the host, or read .devcontainer/README.md" >&2
+        echo "csd: to mount the host audio socket." >&2
+        return 1
+    fi
+}
+
+cmd_live() {
+    [ $# -ge 1 ] || { usage; exit 2; }
+    need_build
+    OPCODE7DIR64=$build "$build/csound" -odac "$@"
+}
+
+cmd_info() {
+    [ $# -ge 1 ] || { usage; exit 2; }
+    if ! command -v sox > /dev/null; then
+        echo "csd: info needs sox, which the container installs." >&2
+        return 1
+    fi
+    sox --i "$1"
+    printf 'peak level     : '
+    sox "$1" -n stat 2>&1 | sed -n 's/^Maximum amplitude: *//p'
+}
+
+cmd_opcodes() {
+    need_build
+    if [ $# -ge 1 ]; then
+        OPCODE7DIR64=$build "$build/csound" -z1 2>&1 | grep -i -- "$1"
+    else
+        OPCODE7DIR64=$build "$build/csound" -z1 2>&1
+    fi
+}
+
+cmd_difftest() {
+    need_build
+    python3 "$root/src/tools/difftest.py" compare \
+        --csound "$build/csound" --plugin-dir "$build" \
+        --suite "$root/tests/soak" \
+        --baseline "$root/tests/difftest-baseline.json" "$@"
+}
+
+command=${1:-help}
+[ $# -gt 0 ] && shift || true
+
+case $command in
+    build)    cmd_build "$@" ;;
+    render)   cmd_render "$@" ;;
+    play)     cmd_play "$@" ;;
+    live)     cmd_live "$@" ;;
+    info)     cmd_info "$@" ;;
+    opcodes)  cmd_opcodes "$@" ;;
+    difftest) cmd_difftest "$@" ;;
+    help|-h|--help) usage ;;
+    *)        echo "csd: unknown command '$command'" >&2; usage; exit 2 ;;
+esac

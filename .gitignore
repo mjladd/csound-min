@@ -243,6 +243,9 @@ vcpkg_installed
 
 #install dir
 bin
+# 'bin' above matches a directory of that name anywhere in the tree.
+# The development container keeps its helper in one.
+!.devcontainer/bin/
 
 # other
 debug
