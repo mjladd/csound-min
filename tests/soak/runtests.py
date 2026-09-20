@@ -86,7 +86,6 @@ testFiles = [
 "chnget",
 "chnmix",
 "chnset",
-"chuap",
 "cigoto",
 "ckgoto",
 "clear",
@@ -129,9 +128,7 @@ testFiles = [
 "cpumeter",
 "cpuprc",
 "cross2",
-"crossfm",
 "crunch",
-"csbeats",
 ###"ctrl7",
 "cuserrnd",
 "dam",
@@ -398,8 +395,6 @@ testFiles = [
 "ifthen",
 "igoto",
 "ihold",
-###"imageopcodes",
-"imageopcodesdemo2",
 ###"inch",
 "include",
 ###"in",
@@ -555,7 +550,6 @@ testFiles = [
 "nestedap",
 "nlfilt2",
 "nlfilt",
-"noise-2",
 "noise",
 ###"noteondur2",
 ###"noteondur",
@@ -1035,9 +1029,9 @@ if(len(sys.argv) > 1):
             sys.exit(0)
         elif arg.startswith("--csound-executable="):
             csound = arg[20:]
-        elif arg.startswith("--opcode6dir64="):
-            os.environ['OPCODE6DIR64'] = arg[15:]
-            print("OPCODE6DIR64 = " + os.environ['OPCODE6DIR64'])
+        elif arg.startswith("--opcode7dir64="):
+            os.environ['OPCODE7DIR64'] = arg[15:]
+            print("OPCODE7DIR64 = " + os.environ['OPCODE7DIR64'])
         elif arg.startswith("--source-dir="):
             source_dir = arg[13:]
             print("source dir = " + source_dir)

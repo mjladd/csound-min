@@ -6,18 +6,6 @@
 import os
 import sys
 
-# from testUI import TestApplication
-
-
-# try:
-#     # Python 3
-#     from tkinter import *
-# except:
-#     # Python 2
-#     from Tkinter import *
-
-
-# showUIatClose = False
 csoundExecutable = ""
 sourceDirectory = "."
 
@@ -26,13 +14,6 @@ class Test:
         self.fileName = fileName
         self.description = ""
         self.expected = expected
-
-# def showUI(results):
-#     root = Tk()
-#     app = TestApplication(master=root)
-#     app.setResults(results.test_output_list)
-#     app.mainloop()
-#     root.destroy()
 
 def showHelp():
     message = """Csound Regression Test Suite by John ffitch
@@ -175,20 +156,16 @@ if __name__ == "__main__":
             if (arg == "--help"):
                 showHelp()
                 sys.exit(0)
-            # elif arg == "--show-ui":
-            #     showUIatClose = True
             elif arg.startswith("--csound-executable="):
                 csoundExecutable = arg[20:]
                 print(csoundExecutable)
-            elif arg.startswith("--opcode6dir64="):
-                os.environ['OPCODE6DIR64'] = arg[15:]
-                print(os.environ['OPCODE6DIR64'])
+            elif arg.startswith("--opcode7dir64="):
+                os.environ['OPCODE7DIR64'] = arg[15:]
+                print(os.environ['OPCODE7DIR64'])
             elif arg.startswith("--source-dir="):
                 sourceDirectory = arg[13:]
 
     results = runTest()
-    # if (showUIatClose):
-    #     showUI(results)
     if results.tests_failed:
         exit(1)
     else:

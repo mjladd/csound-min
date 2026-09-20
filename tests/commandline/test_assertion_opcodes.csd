@@ -1,6 +1,12 @@
+<CsTest>
+description = "assert_true and assert_false pass under --run-unit-tests"
+
+[expect]
+exit = 0
+</CsTest>
 <CsoundSynthesizer>
 <CsOptions>
----run-unit-tests
+-n -d -m0 --run-unit-tests
 </CsOptions>
 <CsInstruments>
 sr=44100

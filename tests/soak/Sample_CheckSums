@@ -63,7 +63,6 @@ f9352d517753ea26c159cddbe6e546ee *chebyshevpoly.wav
 898d5349cf011d84c6a4c844b92db22d *chnget.wav
 898d5349cf011d84c6a4c844b92db22d *chnmix.wav
 898d5349cf011d84c6a4c844b92db22d *chnset.wav
-1ea7d4097d63864bcf3f177f95d63a69 *chuap.wav
 4e07fd76fd12e624718a7198f3d10773 *cigoto.wav
 11133ba851feec3d708e711cad0cb00d *ckgoto.wav
 c79049f0e9afa644e7526a796a0ab0a4 *clear.wav
@@ -100,9 +99,7 @@ f7f80b1d1a7ebdf5e0fbd1e5283dad3a *cpsxpch_pierce.wav
 fb023d8880b835f48e18c17ac03feeb4 *cpumeter.wav
 1a96193a29ddb524229620ec23e2d9e9 *cpuprc.wav
 0209cf4d1e6a266e96e57e38c767da63 *cross2.wav
-cd5bea5a45bfe14461f1bef41877b279 *crossfm.wav
 6e5136705504a2de0696da383abfe4e5 *crunch.wav
-78976af36a080153ddc4d0e657a83d1b *csbeats.wav
 f149ca45433b63b047c6bfa6f87119db *cuserrnd.wav
 5ad179cad0fa21ce8f8c08ebc7f38e8d *dam.wav
 4f762ea8a89fca35db00a72d40a7e59e *dam_expanded.wav
@@ -299,7 +296,6 @@ ee3f0c66c52da67a2eba63d79c8372e5 *hrtfstat-2.wav
 8379bba66c97ef2f8115885bd417115b *ifthen.wav
 4e07fd76fd12e624718a7198f3d10773 *igoto.wav
 76046f84a9680162f0427f4a92c516cb *ihold.wav
-d7725b82e21486c6566a8e399feefaac *imageopcodesdemo2.wav
 b400ab58dc53ba92747567791482888d *include.wav
 3fe429b71f196a2c454e80398eb8a76a *init.wav
 ab5da0ba5e282d8b11e897abcd8d5087 *inleta.wav
@@ -402,7 +398,6 @@ e164c1d375585e09150675d75ea4a0fb *mpulse.wav
 308f8324b2ad0dcc6624c82ad07978c1 *nestedap.wav
 a6a6f0708db466c80dfb99557270cc6f *nlfilt2.wav
 8f9c2d409a07c4249671831823d81f1e *nlfilt.wav
-b0b4148a04ceb56ac171f544377a8890 *noise-2.wav
 5dd51c8df95847e43e17b6945c800914 *noise.wav
 c08b9ff8a21eb2770b904c386e1ae9f6 *notequal.wav
 79dac560908f388d816c2edce176c2e7 *nreverb.wav

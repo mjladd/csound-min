@@ -30,9 +30,9 @@ anois     rand      .1
           chnset    anois, "noise"
  loop:
 idur      random    .3, 1.5
-          timout    0, idur, do
+          timout    0, idur, play
           reinit    loop
- do:
+ play:
 ifreq     random    400, 1200
 iamp      random    .1, .3
 asig      oscils    iamp, ifreq, 0
