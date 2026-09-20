@@ -287,19 +287,31 @@ endif()
 # library installation directories
 option(USE_LIB64 "Set to on to set installation directory for libraries to lib64" OFF)
 if(USE_LIB64)
-	set(LIBRARY_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/lib64")
+	set(LIBRARY_INSTALL_DIR "lib64")
     add_definitions("-DLIB64")
 elseif(NOT DEFINED LIBRARY_INSTALL_DIR)
-    set(LIBRARY_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/lib")
+    set(LIBRARY_INSTALL_DIR "lib")
 endif()
-message(STATUS "LIBRARY INSTALL DIR: ${LIBRARY_INSTALL_DIR}")
+
+# LIBRARY_INSTALL_DIR is relative so that the prefix is applied at install
+# time, which is what cpack and "cmake --install --prefix" need. The plugin
+# path compiled into the library and the libdir in csound.pc must be absolute,
+# so resolve the prefix once here for those two.
+if(IS_ABSOLUTE "${LIBRARY_INSTALL_DIR}")
+    set(LIBRARY_INSTALL_PATH "${LIBRARY_INSTALL_DIR}")
+else()
+    set(LIBRARY_INSTALL_PATH "${CMAKE_INSTALL_PREFIX}/${LIBRARY_INSTALL_DIR}")
+endif()
+message(STATUS "LIBRARY INSTALL DIR: ${LIBRARY_INSTALL_PATH}")
 
 if(USE_DOUBLE)
     message(STATUS "Building with 64-bit floats")
     set(PLUGIN_INSTALL_DIR "${LIBRARY_INSTALL_DIR}/csound/plugins64-${APIVERSION}")
+    set(PLUGIN_INSTALL_PATH "${LIBRARY_INSTALL_PATH}/csound/plugins64-${APIVERSION}")
 else()
     message(STATUS "Building with 32-bit floats")
     set(PLUGIN_INSTALL_DIR "${LIBRARY_INSTALL_DIR}/csound/plugins-${APIVERSION}")
+    set(PLUGIN_INSTALL_PATH "${LIBRARY_INSTALL_PATH}/csound/plugins-${APIVERSION}")
 endif()
 
 
@@ -394,6 +406,7 @@ if(USE_DOUBLE)
     if(APPLE)
         set(CSOUNDLIB "CsoundLib64")
         set(PLUGIN_INSTALL_DIR "${CS_FRAMEWORK_DEST}/${CSOUNDLIB}.framework/Versions/${APIVERSION}/Resources/Opcodes64")
+        set(PLUGIN_INSTALL_PATH "${PLUGIN_INSTALL_DIR}")
     else()
         set(CSOUNDLIB "csound64")
     endif()
@@ -401,6 +414,7 @@ else()
     if(APPLE)
         set(CSOUNDLIB "CsoundLib")
         set(PLUGIN_INSTALL_DIR "${CS_FRAMEWORK_DEST}/${CSOUNDLIB}.framework/Versions/${APIVERSION}/Resources/Opcodes")
+        set(PLUGIN_INSTALL_PATH "${PLUGIN_INSTALL_DIR}")
     else()
         set(CSOUNDLIB "csound")
     endif()
@@ -420,7 +434,7 @@ endif()
 
 if(CS_OPCODE_DIR STREQUAL "")
 if(APPLE)
-        get_filename_component(CS_FRAMEWORK_FULL_PATH ${PLUGIN_INSTALL_DIR} ABSOLUTE)
+        get_filename_component(CS_FRAMEWORK_FULL_PATH ${PLUGIN_INSTALL_PATH} ABSOLUTE)
 
     add_definitions("-DCS_DEFAULT_PLUGINDIR=\"${CS_FRAMEWORK_FULL_PATH}\"")
     set(DEFAULT_OPCODEDIR "${CS_FRAMEWORK_FULL_PATH}")
@@ -440,7 +454,7 @@ else()
 endif()
 
 if(LINUX)
-    set(DEFAULT_OPCODEDIR "${PLUGIN_INSTALL_DIR}")
+    set(DEFAULT_OPCODEDIR "${PLUGIN_INSTALL_PATH}")
     add_definitions("-DCS_DEFAULT_PLUGINDIR=\"${DEFAULT_OPCODEDIR}\"")
     # dir relative to $HOME
     if(USE_DOUBLE)
@@ -1540,6 +1554,6 @@ if(APPLE)
             DESTINATION  ${CS_FRAMEWORK_DEST}/${CSOUNDLIB}.framework/Versions/${APIVERSION})
 else()
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/samples
-            DESTINATION ${CMAKE_INSTALL_PREFIX}/share)
+            DESTINATION share)
 endif()
 

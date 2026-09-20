@@ -1044,6 +1044,10 @@ if(len(sys.argv) > 1):
 
 print("Using Csound Command: " + csound)
 
+# The hrtf csd files name their data files without a path, and the files live
+# in samples/ at the top of the tree. Csound searches SADIR for them.
+os.environ['SADIR'] = os.path.abspath(os.path.join(source_dir, "..", "..", "samples"))
+
 
 try:
     os.remove("Old_Output")
