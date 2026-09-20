@@ -45,6 +45,12 @@ jobs:
           # git describe. That needs the whole history.
           fetch-depth: 0
 
+      - name: Let git read the checkout
+        # The checkout belongs to another user inside the container, and git
+        # refuses to read a repository it does not trust. Without this, the
+        # archive loses the tag in its name and the program reports no commit.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Build and pack
         run: .github/scripts/package.sh
 
