@@ -15,13 +15,13 @@ marked `nondeterministic` and is left out of later comparisons, so that
 
 Record a baseline:
 
-    python3 tools/difftest.py record \
+    python3 src/tools/difftest.py record \
         --csound build/csound --plugin-dir build \
         --suite tests/soak --out baseline.json
 
 Compare a later build:
 
-    python3 tools/difftest.py compare \
+    python3 src/tools/difftest.py compare \
         --csound build/csound --plugin-dir build \
         --suite tests/soak --baseline baseline.json
 
@@ -43,7 +43,7 @@ The parser round-trips every CMake file in this tree byte for byte when the
 false-symbol list is empty. That test is the reason to trust it. Run the
 prune against an upstream checkout with:
 
-    bash tools/prune.sh /path/to/fresh/csound tools/prune_cmake.py
+    bash src/tools/prune.sh /path/to/fresh/csound src/tools/prune_cmake.py
 
 ## tests/difftest-baseline.json
 
@@ -59,9 +59,16 @@ is not in the repository.
 The pruned tree in this repository reproduces all 736 sample for sample.
 Compare against it with:
 
-    python3 tools/difftest.py compare \
+    python3 src/tools/difftest.py compare \
         --csound build/csound --plugin-dir build \
         --suite tests/soak --baseline tests/difftest-baseline.json
 
 The hashes depend on the compiler, the CPU and the build options. A different
 machine needs its own baseline, recorded with `record` before any change.
+
+## What prune.sh does not do
+
+`prune.sh` reproduces the deletions against a fresh upstream checkout. It does
+not reproduce the move of the source trees under `src/`, because that rewrote
+288 source paths and 27 individual references in `CMakeLists.txt`. Read the
+`refactor/src-layout` commit for that change.

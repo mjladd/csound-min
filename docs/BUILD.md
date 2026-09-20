@@ -25,6 +25,15 @@ brew install cmake ninja flex bison libsndfile libsamplerate portaudio
 Homebrew keeps its Flex and Bison out of the default path, because macOS ships
 older versions. The top of `CMakeLists.txt` finds the Homebrew copies.
 
+## Where the build is defined
+
+`CMakeLists.txt` at the root is a stub. It exists because CMake reads a
+`CMakeLists.txt` from the directory you pass to `-S`, and it does nothing but
+set the policies and call `add_subdirectory(src)`.
+
+The build is `src/CMakeLists.txt`. Look there for the source lists, the
+options and the install rules.
+
 ## Build it
 
 ```
@@ -35,7 +44,7 @@ ninja -C build
 The build produces 388 targets in about 12 seconds on 16 cores. The two
 results that matter are `build/csound`, the program, and
 `build/libcsound64.so`, the library. The other files are the analysis
-utilities from `util/` and the loadable audio and MIDI back ends.
+utilities from `src/util/` and the loadable audio and MIDI back ends.
 
 ## Run it without installing
 
@@ -71,7 +80,7 @@ first.
 Csound 7 reads default command line options from a file called `.csound7rc`,
 not `.csoundrc` as version 6 did. It looks in three places, in this order: the
 path in `$CSOUND7RC`, then `$HOME/.csound7rc`, then `.csound7rc` in the current
-directory. See `check_options` in `Top/main.c` line 48.
+directory. See `check_options` in `src/Top/main.c` line 48.
 
 The file holds flags, and a line starting with a semicolon is a comment:
 
@@ -83,11 +92,11 @@ The file holds flags, and a line starting with a semicolon is a comment:
 
 ## Prove that a change did not alter the audio
 
-`tools/difftest.py` renders a suite of `.csd` files and records one hash per
+`src/tools/difftest.py` renders a suite of `.csd` files and records one hash per
 file. Record a baseline before you change anything:
 
 ```
-python3 tools/difftest.py record \
+python3 src/tools/difftest.py record \
     --csound build/csound --plugin-dir build \
     --suite tests/soak --out baseline.json
 ```
@@ -95,14 +104,14 @@ python3 tools/difftest.py record \
 Then compare after the change:
 
 ```
-python3 tools/difftest.py compare \
+python3 src/tools/difftest.py compare \
     --csound build/csound --plugin-dir build \
     --suite tests/soak --baseline baseline.json
 ```
 
 The recording step renders each file twice and excludes the files that do not
 reproduce, so random number opcodes do not raise false alarms. See
-`tools/README.md` for the details.
+[../src/tools/README.md](../src/tools/README.md) for the details.
 
 ## If the build fails
 
