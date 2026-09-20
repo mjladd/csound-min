@@ -139,7 +139,6 @@ option(BUILD_TESTS "Build tests" OFF)
 option(LEXER_DEBUG "Build lexer with debug option" OFF)
 option(USE_GIT_COMMIT "Show the git commit in version information" ON)
 option(REQUIRE_PTHREADS "For non-Windows systems, set whether Csound will use threads or not" ON)
-option(BUILD_DOCS "Build documentation (requires doxygen)" OFF)
 option(DEBUG_ERROR_ON_WARNING "For a debug build, error on a compiler# warning" OFF)
 option(BUILD_PLUGINS "Build external opcodes as plugins" OFF)
     # Keep this WASI-only mode out of native platform configurations, including
@@ -1488,26 +1487,6 @@ set (CPACK_PACKAGE_VERSION_MINOR "0")
 set (CPACK_PACKAGE_VERSION_PATCH "0")
 include (CPack)
 
-# Documentation
-if(BUILD_DOCS)
-    find_package(Doxygen)
-
-    if(DOXYGEN_FOUND)
-        configure_file(${CMAKE_CURRENT_SOURCE_DIR}/config.doxygen
-            ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile @ONLY
-        )
-
-        add_custom_target(doc ${DOXYGEN_EXECUTABLE}
-            ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile
-            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        )
-    else()
-        message(STATUS "Not building documentation")
-    endif()
-else()
-    message(STATUS "Not building documentation")
-endif()
-
 # install CMake package configuration files
 include(CMakePackageConfigHelpers)
 
@@ -1581,8 +1560,3 @@ else()
             DESTINATION ${CMAKE_INSTALL_PREFIX}/share)
 endif()
 
-# install mingw libraries
-
-add_custom_target(format sh format.sh  Top/*.c  Top/*.cpp  Engine/*.c
-    OOps/*.c Opcodes/*.c  Opcodes/*.cpp Opcodes/*/*.c  Opcodes/*/*.cpp
-    util/*.c WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
