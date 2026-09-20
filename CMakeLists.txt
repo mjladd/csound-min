@@ -17,86 +17,7 @@ set(CMAKE_MACOSX_RPATH 1)
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 set(CMAKE_OSX_DEPLOYMENT_TARGET 11)
 
-option(USE_VCPKG "Use VCPKG to download and manage dependencies" OFF)
 
-if (USE_VCPKG)
-    # Detect correct triplet based on CMake env
-    if (ANDROID)
-        if(CMAKE_TARGET_ARCHITECTURE STREQUAL "arm")
-            set(VCPKG_TARGET_TRIPLET "arm-android")
-            set(CMAKE_ANDROID_ARCH_ABI armeabi-v7a)
-        elseif(CMAKE_TARGET_ARCHITECTURE STREQUAL "arm64")
-            set(VCPKG_TARGET_TRIPLET "arm64-android")
-            set(CMAKE_ANDROID_ARCH_ABI arm64-v8a)
-        elseif(CMAKE_TARGET_ARCHITECTURE STREQUAL "x86")
-            set(VCPKG_TARGET_TRIPLET "x86-android")
-            set(CMAKE_ANDROID_ARCH_ABI x86)
-        elseif(CMAKE_TARGET_ARCHITECTURE STREQUAL "x64")
-            set(VCPKG_TARGET_TRIPLET "x64-android")
-            set(CMAKE_ANDROID_ARCH_ABI x86_64)
-        endif()
-        set(CMAKE_SYSTEM_VERSION 21)
-        set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/platform/android/android.cmake)
-    elseif (OSXCROSS_TARGET)
-        if (IOS)
-            if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
-                set(VCPKG_TARGET_TRIPLET "x64-ioscross")
-                set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/platform/ioscross/ios-x64.cmake)
-            elseif(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-                set(VCPKG_TARGET_TRIPLET "arm64-ioscross")
-                set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/platform/ioscross/ios-arm64.cmake)
-            endif()
-        else()
-            if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
-                set(VCPKG_TARGET_TRIPLET "x64-osxcross")
-                set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/platform/osxcross/osx-x64.cmake)
-            elseif(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-                set(VCPKG_TARGET_TRIPLET "arm64-osxcross")
-                set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/platform/osxcross/osx-arm64.cmake)
-            endif()
-        endif()
-    elseif (CMAKE_SYSTEM_NAME STREQUAL "MinGW" AND UNIX)
-        # Detect 32-bit vs 64-bit MinGW based on compiler
-        if (CMAKE_C_COMPILER MATCHES "i686-w64-mingw32")
-            set(VCPKG_TARGET_TRIPLET "x86-mingw-static")
-            set(VCPKG_TARGET_ARCHITECTURE x86)
-        else()
-            set(VCPKG_TARGET_TRIPLET "x64-mingw-static")
-            set(VCPKG_TARGET_ARCHITECTURE x64)
-        endif()
-        set(VCPKG_INSTALL_OPTIONS "--allow-unsupported")
-        set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/toolchains/mingw.cmake)
-        set(VCPKG_CMAKE_SYSTEM_NAME MinGW)
-    elseif (CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-        set(VCPKG_TARGET_TRIPLET "wasm32-emscripten")
-        set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/platform/wasm/wasm32.cmake)
-        set(VCPKG_CMAKE_SYSTEM_NAME Emscripten)
-    elseif (WIN32)
-        # Detect 32-bit vs 64-bit Windows build
-        if (CMAKE_GENERATOR_PLATFORM STREQUAL "Win32")
-            set(VCPKG_TARGET_TRIPLET "x86-windows-static")
-        else()
-            set(VCPKG_TARGET_TRIPLET "x64-windows-static")
-        endif()
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    elseif(APPLE)
-        execute_process(COMMAND uname -m OUTPUT_VARIABLE ARCH)
-        if (ARCH STREQUAL "arm64\n")
-            set(VCPKG_TARGET_TRIPLET "arm64-osx")
-        else()
-            set(VCPKG_TARGET_TRIPLET "x64-osx")
-        endif()
-    elseif (UNIX)
-        set(VCPKG_TARGET_TRIPLET "x64-linux")
-    endif()
-
-    set(VCPKG_FEATURE_FLAGS versions)
-    set(X_VCPKG_APPLOCAL_DEPS_INSTALL ON)
-    set(VCPKG_OVERLAY_TRIPLETS ${CMAKE_CURRENT_SOURCE_DIR}/platform/vcpkg/triplets)
-    set(VCPKG_OVERLAY_PORTS ${CMAKE_CURRENT_SOURCE_DIR}/platform/vcpkg/ports)
-    set(CMAKE_TOOLCHAIN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake
-        CACHE STRING "Vcpkg toolchain file")
-endif()
 
 message(STATUS "VCPKG_TARGET_TRIPLET: ${VCPKG_TARGET_TRIPLET}")
 message(STATUS "CMAKE_TOOLCHAIN_FILE: ${CMAKE_TOOLCHAIN_FILE}")
@@ -142,11 +63,7 @@ set(LOCALE_INSTALL_DIR "share/locale")
 set(HEADER_INSTALL_DIR "include/csound")
 set(SAMPLES_INSTALL_DIR "/samples")
 
-if(OSXCROSS_TARGET)
-    set(CS_FRAMEWORK_DEST "${CMAKE_INSTALL_PREFIX}/Library/Frameworks" CACHE PATH "Csound framework path")
-else()
     set(CS_FRAMEWORK_DEST "$ENV{HOME}/Library/Frameworks" CACHE PATH "Csound framework path")
-endif()
 
 set(CS_OPCODE_DIR "" CACHE PATH "opcodedir path")
 
@@ -215,36 +132,24 @@ option(BUILD_UTILITIES "Build stand-alone executables for utilities that can als
 option(NEW_PARSER_DEBUG "Enable tracing of new parser" OFF)
 option(BUILD_MULTI_CORE "Enable building for multicore system" ON)
 option(FAIL_MISSING "Fail when a required external dependency is not present (useful for packagers)" OFF)
-option(USE_GETTEXT "Use the Gettext internationalization library" ON)
 option(BUILD_STATIC_LIBRARY "Also build a static version of the csound library" OFF)
 option(USE_LRINT "Use lrint/lrintf for converting floating point values to integers." ON)
 option(USE_CURL "Use CURL library" ON)
 option(USE_DEFAULT_OPCODEDIR "Use default opcodedir for the system" ON)
-option(BUILD_INSTALLER "Build installer" OFF)
 option(BUILD_TESTS "Build tests" OFF)
 option(LEXER_DEBUG "Build lexer with debug option" OFF)
 option(USE_GIT_COMMIT "Show the git commit in version information" ON)
 option(REQUIRE_PTHREADS "For non-Windows systems, set whether Csound will use threads or not" ON)
 option(BUILD_DOCS "Build documentation (requires doxygen)" OFF)
 option(DEBUG_ERROR_ON_WARNING "For a debug build, error on a compiler# warning" OFF)
-option(BARE_METAL "To configure for bare metal build" OFF)
-option(CUSTOM_MALLOC "Use custom malloc in bare metal builds" OFF)
 option(BUILD_PLUGINS "Build external opcodes as plugins" OFF)
-if(CMAKE_SYSTEM_NAME_UPPER STREQUAL "WASI")
-    option(BUILD_WASI_BROWSER
-           "Build WASI for a browser host instead of as a standalone command"
-           OFF)
-else()
     # Keep this WASI-only mode out of native platform configurations, including
     # caches left behind by a previous cross-compilation.
     unset(BUILD_WASI_BROWSER CACHE)
     set(BUILD_WASI_BROWSER OFF)
-endif()
-option(BUILD_BELA "Build Bela main program" OFF)
 option(BUILD_WITH_LTO "Build with link-time optimisations" OFF)
 option(USE_SHORT_TABLE_LENGTH  "Build with original max table length 2^24" OFF)
 option(USE_ASA  "Use address sanitizer in Debug build" ON)
-option(USE_STATIC_DEPS "Use static dependencies for libsndfile" OFF)
 option(USE_LIBSAMPLERATE "Use libsamplerate for sample rate conversion" ON)
 option(USE_LOCK_BARRIER "Use lock-based barrier in PARCS " OFF)
 option(ALIGN_MEMORY "Align memory allocation to MYFLT size" OFF)
@@ -256,12 +161,7 @@ set(CSOUND_BUILD_DATE "" CACHE STRING "Override build date shown in version outp
 
 # secret rabbit code
 if (USE_LIBSAMPLERATE)
-    if (USE_VCPKG)
-      find_package(SampleRate CONFIG REQUIRED)
-      assign_bool(SampleRate_FOUND TARGET SampleRate::samplerate)
-    else()
        find_package(SampleRate MODULE)
-    endif()
 endif()
 
 if(SampleRate_FOUND)
@@ -306,17 +206,6 @@ set(CSOUNDLIB_SHARED_LINK_OPTIONS "")
 message(STATUS "Not building with link-time optimisations")
 endif()
 
-if(BARE_METAL)
-message(STATUS "Building for bare metal")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  -DBARE_METAL")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DBARE_METAL")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  -DNO_CSOUND_SERVER")
-
-    if(CUSTOM_MALLOC)
-     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  -DCUSTOM_MALLOC")
-    # the default is for STM32H7: -DMALLOC_BASE=0xC0000000
-    endif()
-endif()
 
 # in Release configuration, set NDEBUG
 if(${CMAKE_BUILD_TYPE} MATCHES "Release")
@@ -328,7 +217,6 @@ elseif(${CMAKE_BUILD_TYPE} MATCHES "Debug")
 endif()
 
 # set -Werror if in Debug configuration
-if(NOT MSVC AND NOT WASM)
 #ifdef BARE_METAL
     set(CMAKE_CXX_FLAGS_RELEASE "-Os")
     set(CMAKE_C_FLAGS_RELEASE "-Os")
@@ -345,10 +233,6 @@ if(NOT MSVC AND NOT WASM)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall")
         if(APPLE)
-            if(OSXCROSS_TARGET)
-                set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wshorten-64-to-32 -Wpointer-sign")
-                set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wshorten-64-to-32 -Wpointer-sign")
-            else()
                 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wshorten-64-to-32 -Wpointer-sign")
                 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wshorten-64-to-32 -Wpointer-sign")
                if(USE_ASA)
@@ -358,10 +242,8 @@ if(NOT MSVC AND NOT WASM)
                 else()
                 message(STATUS  "not using address sanitizer")
                endif()
-            endif()
         endif()
     endif()
-endif()
 
 if(USE_COMPILER_OPTIMIZATIONS)
     include(cmake/CompilerOptimizations.cmake)
@@ -374,16 +256,6 @@ endif()
 if(USE_AVX2)
     # Restrict to x86-64; CMAKE_SYSTEM_PROCESSOR may be "x86_64" or "AMD64"
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-        if(MSVC)
-            check_cxx_compiler_flag("/arch:AVX2" COMPILER_SUPPORTS_AVX2)
-            if(COMPILER_SUPPORTS_AVX2)
-                set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   /arch:AVX2")
-                set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
-                message(STATUS "AVX2 enabled (/arch:AVX2)")
-            else()
-                message(STATUS "AVX2 requested but compiler does not support /arch:AVX2 – skipping")
-            endif()
-        else()
             check_c_compiler_flag("-mavx2" COMPILER_SUPPORTS_AVX2)
             if(COMPILER_SUPPORTS_AVX2)
                 set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -mavx2")
@@ -392,7 +264,6 @@ if(USE_AVX2)
             else()
                 message(STATUS "AVX2 requested but compiler does not support -mavx2 – skipping")
             endif()
-        endif()
     else()
         message(STATUS "USE_AVX2 is ON but target is not x86-64 (${CMAKE_SYSTEM_PROCESSOR}) – skipping")
     endif()
@@ -431,11 +302,6 @@ if(APPLE)
     endif()
 endif()
 
-if(OSXCROSS_TARGET)
-    set(CMAKE_C_FLAGS "-I${OSXCROSS_SDK}/usr/include ${CMAKE_C_FLAGS}")
-    set(CMAKE_CXX_FLAGS "-I${OSXCROSS_SDK}/usr/include ${CMAKE_CXX_FLAGS}")
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -L${CMAKE_OSX_SYSROOT}/usr/lib")
-endif()
 
 # library installation directories
 option(USE_LIB64 "Set to on to set installation directory for libraries to lib64" OFF)
@@ -455,35 +321,10 @@ else()
     set(PLUGIN_INSTALL_DIR "${LIBRARY_INSTALL_DIR}/csound/plugins-${APIVERSION}")
 endif()
 
-if(WIN32 AND NOT MSVC)
-    if(EXISTS "C:/MinGW/include")
-        list(APPEND libcsound_private_include_dirs "C:/MinGW/include")
-    else()
-        MESSAGE(STATUS "MinGW include dir not found.")
-    endif()
-    set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -Wl,--add-stdcall-alias")
-endif()
 
 
 
 
-if(WIN32)
-    set(CMAKE_SHARED_LIBRARY_PREFIX "")
-    set(CMAKE_SHARED_MODULE_PREFIX "")
-
-    set(CSOUND_WINDOWS_LIBRARIES kernel32 ws2_32)
-
-    if(MSVC)
-        # Experimented with flags but did not make change performance results
-        #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /Oi /fp:fast /arch:AVX2")
-        #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Oi /fp:fast /arch:AVX2")
-    else()
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mstackrealign -static-libgcc -static")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mstackrealign -static-libstdc++ -static-libgcc -static")
-        set_target_properties(${CSOUNDLIB} PROPERTIES LINK_FLAGS "-static-libstdc++ -static-libgcc -static")
-        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -static-libstdc++ -static-libgcc -static")
-    endif()
-endif()
 
 
 set(BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR})
@@ -545,14 +386,8 @@ if (HAS_CXX_VISIBILITY_HIDDEN)
 endif()
 
 if(APPLE)
-    if(IOS)
-        message(STATUS "Building for iOS.")
-    else()
         message(STATUS "Building for OSX")
 
-        if(BUILD_INSTALLER)
-            set(CS_FRAMEWORK_DEST "${CMAKE_INSTALL_PREFIX}")
-        endif()
 
         set(DEFAULT_OSX_SYSROOT /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.8.sdk/)
         if(NOT CMAKE_OSX_SYSROOT AND EXISTS ${DEFAULT_OSX_SYSROOT})
@@ -571,7 +406,6 @@ if(APPLE)
         if(NOT VECLIB_PATH)
             set(VECLIB_PATH "/System/Library/Frameworks/")
         endif()
-    endif()
 endif()
 
 # Set plugins install directory
@@ -605,11 +439,7 @@ endif()
 
 if(CS_OPCODE_DIR STREQUAL "")
 if(APPLE)
-    if(BUILD_INSTALLER)
-       	set(CS_FRAMEWORK_FULL_PATH "/Library/Frameworks/${CSOUNDLIB}.framework/Versions/${APIVERSION}/Resources/Opcodes64")
-    else()
         get_filename_component(CS_FRAMEWORK_FULL_PATH ${PLUGIN_INSTALL_DIR} ABSOLUTE)
-    endif()
 
     add_definitions("-DCS_DEFAULT_PLUGINDIR=\"${CS_FRAMEWORK_FULL_PATH}\"")
     set(DEFAULT_OPCODEDIR "${CS_FRAMEWORK_FULL_PATH}")
@@ -640,15 +470,6 @@ if(LINUX)
     add_definitions("-DCS_DEFAULT_USER_PLUGINDIR=\"${DEFAULT_USER_PLUGINDIR}\"")
 endif()
 
-if(WIN32)
-    # dir relaive to %LOCALAPPDATA%
-    if(USE_DOUBLE)
-        set(DEFAULT_USER_PLUGINDIR "csound/${APIVERSION}/plugins64")
-    else()
-        set(DEFAULT_USER_PLUGINDIR "csound/${APIVERSION}/plugin")
-    endif()
-    add_definitions("-DCS_DEFAULT_USER_PLUGINDIR=\"${DEFAULT_USER_PLUGINDIR}\"")
-endif()
 
 if(APPLE OR LINUX)
     message(STATUS "default plugin dir set to ${DEFAULT_OPCODEDIR}")
@@ -675,14 +496,9 @@ TEST_BIG_ENDIAN(BIG_ENDIAN)
 ## HEADER/LIBRARY/OTHER CHECKS ##
 # Check if libsndfile is available, if not, disable build
 if(USE_LIBSNDFILE)
-    if(USE_VCPKG)
-        find_package(SndFile CONFIG REQUIRED)
-        assign_bool(SndFile_FOUND TARGET SndFile::sndfile)
-    else()
         message(STATUS "looking  at ${CMAKE_PREFIX_PATH}")
         find_package(SndFile MODULE)
         message(STATUS "libsndfile found: ${SndFile_LIBRARY}")
-    endif()
 endif()
 check_deps(USE_LIBSNDFILE SndFile_FOUND)
 
@@ -694,9 +510,6 @@ if(USE_LIBSNDFILE)
     add_compile_definitions("USE_LIBSNDFILE")
     set(CSOUND_PRIVATE_LIBS "${CSOUND_PRIVATE_LIBS} -lsndfile")
 
-    if(NOT USE_VCPKG AND EMSCRIPTEN)
-        list(APPEND libcsound_private_include_dirs ${Csound_SOURCE_DIR}/emscripten/deps/libsndfile-1.0.25/src/)
-    endif()
 
     # add to required libraries so we can check for MIDI support
     list(APPEND CMAKE_REQUIRED_LIBRARIES SndFile::sndfile)
@@ -747,8 +560,6 @@ else()
     message(STATUS "Not using atomic builtins - user disabled")
 endif()
 
-find_package(Intl)
-find_package(Gettext)
 find_library(MATH_LIBRARY m)
 
 if (NOT MATH_LIBRARY)
@@ -769,18 +580,8 @@ endif()
 find_file(DIRENT_H "dirent.h")
 
 if(DIRENT_H)
-    if(MSVC)
-        get_filename_component(DIRENT_FOLDER ${DIRENT_H} DIRECTORY)
-        list(APPEND CMAKE_REQUIRED_INCLUDES ${DIRENT_FOLDER})
-    endif()
 else()
-    if(MSVC)
-        message(FATAL_ERROR "Dirent.h not found, Csound will not be able to load dynamic plugins. Cannot continue with project generation")
-    else()
-     if(NOT BARE_METAL)
         message(WARNING "Dirent.h not found, Csound will not be able to load dynamic plugins such as real-time audio")
-    endif()
-    endif()
 endif()
 
 set(HEADERS_TO_CHECK
@@ -823,10 +624,6 @@ else()
 endif()
 
 # Flex/Bison for the new parser
-if(WIN32)
-    find_program(FLEX_EXECUTABLE NAMES flex win_flex win_flex.exe)
-    find_program(BISON_EXECUTABLE NAMES bison win_bison win_bison.exe)
-endif()
 
 find_package(FLEX)
 find_package(BISON)
@@ -1018,13 +815,6 @@ set(libcsound_SRCS
     OOps/compile_ops.c
 )
 
-if(IOS AND NOT  OSXCROSS_TARGET)
-
-set(libcsound_SRCS ${libcsound_SRCS}
-  iOS/Csound-for-iOS/src/rtaunit.c
-  iOS/Csound-for-iOS/src/iOSCsound.cpp
-)
-endif()
 
 set(vbap_ops
     Opcodes/vbap.c
@@ -1032,15 +822,9 @@ set(vbap_ops
 
 set(libcsound_static_SRCS  ${libcsound_SRCS})
 
-if(WIN32 AND NOT MSVC)
-    set_source_files_properties(Opcodes/sfont.c PROPERTIES
-        COMPILE_FLAGS -mno-ms-bitfields)
-endif()
 
-if(NOT MSVC)
     set_source_files_properties(Opcodes/sfont.c PROPERTIES
         COMPILE_FLAGS -Wno-address-of-packed-member)
-endif()
 
 set(physmod_SRCS
     Opcodes/physutil.c
@@ -1109,26 +893,6 @@ set(externs_SRCS
     Opcodes/paulstretch.c
 )
 
-if(CMAKE_SYSTEM_NAME_UPPER STREQUAL "WASI")
-    set(HAVE_PTHREAD 0)
-    # Disable shared libraries for WASI to avoid -shared flag warning
-    set(BUILD_SHARED_LIBS OFF)
-    list(REMOVE_ITEM externs_SRCS Opcodes/serial.c)
-    list(REMOVE_ITEM externs_SRCS Opcodes/system_call.c)
-    if(BUILD_WASI_BROWSER)
-        # Browser builds use JavaScript-hosted callbacks and imported memory.
-        list(APPEND libcsound_CFLAGS -DCSOUND_WASI_BROWSER)
-        list(APPEND libcsound_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src/csound_wasm.c)
-        list(APPEND libcsound_static_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src/csound_wasm.c)
-    else()
-        # Standalone WASI has a conventional command entry point and no JS host.
-        list(APPEND libcsound_CFLAGS -DCSOUND_WASI_CLI)
-        # The deconv opcode and named GEN normally arrive through the stdutil
-        # plugin. Link only their source into the no-dynamic-loader command.
-        list(APPEND libcsound_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/util/mkir.c)
-        list(APPEND libcsound_static_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/util/mkir.c)
-    endif()
-endif()
 
 set(newgabops_SRCS
     Opcodes/gab/tabmorph.c
@@ -1385,12 +1149,6 @@ set_source_files_properties(${YACC_OUTH} GENERATED)
 set_source_files_properties(${LEX_OUT} GENERATED)
 set_source_files_properties(${PRELEX_OUT} GENERATED)
 
-if(MSVC)
-    set_source_files_properties(${LEX_OUT} PROPERTIES
-        COMPILE_FLAGS -DYY_NO_UNISTD_H)
-    set_source_files_properties(${PRELEX_OUT} PROPERTIES
-        COMPILE_FLAGS -DYY_NO_UNISTD_H)
-endif()
 
 # Handling New Score Parser
 
@@ -1438,10 +1196,6 @@ list(APPEND libcsound_static_SRCS ${PRELEX_SCOOUT})
 #set_source_files_properties(${YACC_SCOOUT} GENERATED)
 #set_source_files_properties(${LEX_SCOOUT} GENERATED)
 set_source_files_properties(${PRELEX_SCOOUT} GENERATED)
-if(MSVC)
-    set_source_files_properties(${PRELEX_SCOOUT} PROPERTIES
-        COMPILE_FLAGS -DYY_NO_UNISTD_H)
-endif()
 
 if(NEW_PARSER_DEBUG)
     message(STATUS "Building with new parser debugging.")
@@ -1488,34 +1242,23 @@ if(APPLE)
 endif()
 
 
-if(NOT IOS OR OSXCROSS_TARGET)
     set(_csound_library_type SHARED)
-    if(CMAKE_SYSTEM_NAME_UPPER STREQUAL "WASI")
-        set(_csound_library_type STATIC)
-    endif()
 
-    if(NOT BARE_METAL)
         add_library(${CSOUNDLIB} ${_csound_library_type} ${libcsound_SRCS})
-    else()
-       add_library(${CSOUNDLIB} STATIC ${libcsound_SRCS})
-    endif()
     target_include_directories(${CSOUNDLIB} PRIVATE ${libcsound_private_include_dirs})
     target_include_directories(${CSOUNDLIB} PUBLIC ${libcsound_public_include_dirs})
     set_target_properties(${CSOUNDLIB} PROPERTIES SOVERSION ${APIVERSION})
-endif()
 
 
 
 
 if(APPLE)
-    if(NOT IOS OR OSXCROSS_TARGET)
         target_link_options(${CSOUNDLIB} PRIVATE LINKER:-adhoc_codesign)
         set_target_properties(${CSOUNDLIB} PROPERTIES FRAMEWORK YES)
         set_target_properties(${CSOUNDLIB} PROPERTIES FRAMEWORK_VERSION "${APIVERSION}")
         set_target_properties(${CSOUNDLIB} PROPERTIES PUBLIC_HEADER
             "${csheaders};${CMAKE_CURRENT_BINARY_DIR}/include/float-version.h;${CMAKE_CURRENT_BINARY_DIR}/include/version.h"
         )
-    endif()
 endif()
 
 if(BUILD_PLUGINS)
@@ -1525,21 +1268,11 @@ if(BUILD_PLUGINS)
 endif()
 
 # Add the install target
-if(WIN32)
-    install(TARGETS ${CSOUNDLIB}
-        EXPORT CsoundPackageExports
-        RUNTIME DESTINATION "${EXECUTABLE_INSTALL_DIR}"
-        ARCHIVE DESTINATION "${LIBRARY_INSTALL_DIR}"
-        FRAMEWORK DESTINATION "${CS_FRAMEWORK_DEST}")
-else()
-    if(NOT IOS OR OSXCROSS_TARGET)
         install(TARGETS ${CSOUNDLIB}
             EXPORT CsoundPackageExports
             LIBRARY DESTINATION "${LIBRARY_INSTALL_DIR}"
             ARCHIVE DESTINATION "${LIBRARY_INSTALL_DIR}"
             FRAMEWORK DESTINATION "${CS_FRAMEWORK_DEST}")
-    endif()
-endif()
 
 if (LINUX)
     set_target_properties(${CSOUNDLIB} PROPERTIES
@@ -1558,34 +1291,13 @@ if (HAVE_ATOMIC_BUILTIN)
     set(CSOUND_PRIVATE_LIBS "${CSOUND_PRIVATE_LIBS} ${ATOMIC_LIB}")
 endif()
 
-if(WIN32)
-    list(APPEND libcsound_LIBS "${CSOUND_WINDOWS_LIBRARIES}")
-endif()
 
 if(USE_CURL AND CURL_FOUND)
   list(APPEND libcsound_LIBS ${CURL_LIBRARIES})
   set(CSOUND_PRIVATE_LIBS "${CSOUND_PRIVATE_LIBS} ${CURL_LIBRARIES}")
 endif()
 
-check_deps(USE_GETTEXT Intl_FOUND GETTEXT_FOUND)
-if(USE_GETTEXT)
-    message(STATUS "Using GNU gettext.")
-    list(APPEND libcsound_LIBS Intl::Intl)
-    list(APPEND libcsound_CFLAGS -DGNU_GETTEXT)
-    set(CSOUND_PRIVATE_LIBS "${CSOUND_PRIVATE_LIBS} -lintl")
-    if(NOT DEFINED CSOUND_TEXTDOMAIN AND BUILD_RELEASE AND (LINUX))
-        file(TO_NATIVE_PATH "${CMAKE_INSTALL_PREFIX}/${LOCALE_INSTALL_DIR}" CSOUND_TEXTDOMAIN)
-    endif()
-    if(CSOUND_TEXTDOMAIN)
-        message(STATUS "Setting textdomain to ${CSOUND_TEXTDOMAIN}.")
-        set_source_files_properties(Top/getstring.c PROPERTIES
-            COMPILE_FLAGS -DCSOUND_TEXTDOMAIN=\\\"${CSOUND_TEXTDOMAIN}\\\")
-    else()
-        message(STATUS "Not setting textdomain.")
-    endif()
-else()
     message(STATUS "Not using localization.")
-endif()
 
 if (HAVE_EXECINFO_H)
     find_library(LIBEXECINFO_LIBRARY execinfo)
@@ -1630,9 +1342,6 @@ if((APPLE AND NOT IOS) OR (OSXCROSS_TARGET))
     endif()
 endif()
 
-if(WIN32)
-    add_definitions(-DWIN32)
-endif()
 
 check_function_exists(strlcat HAVE_STRLCAT)
 if(HAVE_STRLCAT)
@@ -1685,89 +1394,23 @@ if(BIG_ENDIAN)
     list(APPEND libcsound_CFLAGS -DWORDS_BIGENDIAN)
 endif()
 
-if(NOT IOS OR OSXCROSS_TARGET)
     target_compile_options(${CSOUNDLIB} PRIVATE ${libcsound_CFLAGS})
-endif()
 
-if(MSVC)
-    target_link_libraries(${CSOUNDLIB} PRIVATE ws2_32)
-else()
-    if(NOT IOS OR OSXCROSS_TARGET)
         target_link_libraries(${CSOUNDLIB} PRIVATE ${libcsound_LIBS})
-    endif()
-endif()
 
 if(USE_LIBSNDFILE)
-    if(NOT IOS OR OSXCROSS_TARGET)
         target_link_libraries(${CSOUNDLIB} PRIVATE SndFile::sndfile)
-       if(USE_STATIC_DEPS)
-          message(STATUS "Adding static link libraries for libsndfile:")
-          Find_Package(Oggs)
-          if(Oggs_FOUND)
-           message(STATUS "Found ogg:${Oggs_LIBRARY}")
-          else()
-           message(STATUS "Ogg not found")
-          endif()
-          Find_Package(Vorbiss)
-          if(Vorbiss_FOUND)
-           message(STATUS "Found vorbis:${Vorbiss_LIBRARY}")
-          else()
-           message(STATUS "Vorbis not found")
-          endif()
-          Find_Package(Vorbisencs)
-          if(Vorbisencs_FOUND)
-           message(STATUS "Found vorbisenc:${Vorbisencs_LIBRARY}")
-          else()
-           message(STATUS "Vorbisenc not found")
-          endif()
-          Find_Package(Opuss)
-          if(Opuss_FOUND)
-           message(STATUS "Found opus:${Opuss_LIBRARY}")
-          else()
-           message(STATUS "Opus not found")
-          endif()
-          Find_Package(FLACS)
-          if(FLACS_FOUND)
-           message(STATUS "Found flac:${FLACS_LIBRARY}")
-          else()
-           message(STATUS "FLAC not found")
-          endif()
-          Find_Package(LAME)
-           if(LAME_FOUND)
-           message(STATUS "Found lame:${LAME_LIBRARY}")
-          else()
-           message(STATUS "LAME not found")
-          endif()
-          Find_Package(Mpg123s)
-          if(Mpg123s_FOUND)
-           message(STATUS "Found mpg123:${Mpg123s_LIBRARY}")
-          else()
-           message(STATUS "Mpg123 not found")
-          endif()
-          target_link_libraries(${CSOUNDLIB} PRIVATE Oggs::oggs)
-          target_link_libraries(${CSOUNDLIB} PRIVATE Vorbiss::vorbiss)
-          target_link_libraries(${CSOUNDLIB} PRIVATE Vorbisencs::vorbisencs)
-          target_link_libraries(${CSOUNDLIB} PRIVATE FLACS::flacs)
-          target_link_libraries(${CSOUNDLIB} PRIVATE Opuss::opuss)
-          target_link_libraries(${CSOUNDLIB} PRIVATE "${LAME_LIBRARY}")
-          target_link_libraries(${CSOUNDLIB} PRIVATE Mpg123s::mpg123s)
-       endif()
-    endif()
 endif()
 
 if(SampleRate_FOUND)
-    if(NOT IOS OR OSXCROSS_TARGET)
         target_link_libraries(${CSOUNDLIB} PRIVATE SampleRate::samplerate)
-    endif()
     set(CSOUND_PRIVATE_LIBS "${CSOUND_PRIVATE_LIBS} -lsamplerate")
 endif()
 
-if(NOT IOS OR OSXCROSS_TARGET)
     set_target_properties(${CSOUNDLIB} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${BUILD_BIN_DIR}
         LIBRARY_OUTPUT_DIRECTORY ${BUILD_LIB_DIR}
         ARCHIVE_OUTPUT_DIRECTORY ${BUILD_LIB_DIR})
-endif()
 
 
 
@@ -1814,16 +1457,12 @@ endif()
 add_subdirectory(Opcodes)
 add_subdirectory(InOut)
 add_subdirectory(Frontends)
-add_subdirectory(Python)
-add_subdirectory(Bela)
 add_subdirectory(util)
 add_subdirectory(util1)
-add_subdirectory(po)
 add_subdirectory(tests/c)
 add_subdirectory(tests/commandline)
 add_subdirectory(tests/regression)
 add_subdirectory(tests/soak)
-add_subdirectory(tests/python)
 
 # uninstall target
 configure_file(
@@ -1875,13 +1514,11 @@ endif()
 include(CMakePackageConfigHelpers)
 
 # export targets to CsoundTargets.cmake (separate from config wrapper)
-if(WIN32 OR NOT IOS OR OSXCROSS_TARGET)
     install(EXPORT CsoundPackageExports
         FILE "CsoundTargets.cmake"
         NAMESPACE "Csound::"
         DESTINATION "share/csound"
     )
-endif()
 
 # export static library targets (only when BUILD_STATIC_LIBRARY is enabled)
 if(BUILD_STATIC_LIBRARY AND NOT BARE_METAL)
@@ -1947,24 +1584,6 @@ else()
 endif()
 
 # install mingw libraries
-if(MINGW)
-    # Detect 32-bit vs 64-bit MinGW for runtime DLL paths
-    if (CMAKE_C_COMPILER MATCHES "i686-w64-mingw32")
-        # 32-bit MinGW
-        file(GLOB LIBSTDC_DLL "/usr/lib/gcc/i686-w64-mingw32/*-posix/libstdc++-6.dll ")
-        file(COPY ${LIBSTDC_DLL} DESTINATION "${BUILD_DIR}")
-        file(GLOB LIBGCC_DLL "/usr/lib/gcc/i686-w64-mingw32/*-posix/libgcc_s_dw2-1.dll ")
-        file(COPY ${LIBGCC_DLL} DESTINATION "${BUILD_DIR}")
-        file(COPY /usr/i686-w64-mingw32/lib/libwinpthread-1.dll DESTINATION "${BUILD_DIR}")
-    else()
-        # 64-bit MinGW
-        file(GLOB LIBSTDC_DLL "/usr/lib/gcc/x86_64-w64-mingw32/*-posix/libstdc++-6.dll ")
-        file(COPY ${LIBSTDC_DLL} DESTINATION "${BUILD_DIR}")
-        file(GLOB LIBGCC_DLL "/usr/lib/gcc/x86_64-w64-mingw32/*-posix/libgcc_s_seh-1.dll ")
-        file(COPY ${LIBGCC_DLL} DESTINATION "${BUILD_DIR}")
-        file(COPY /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll DESTINATION "${BUILD_DIR}")
-    endif()
-endif()
 
 add_custom_target(format sh format.sh  Top/*.c  Top/*.cpp  Engine/*.c
     OOps/*.c Opcodes/*.c  Opcodes/*.cpp Opcodes/*/*.c  Opcodes/*/*.cpp
