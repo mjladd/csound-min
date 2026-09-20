@@ -10,7 +10,7 @@ cmake_policy(SET CMP0077 NEW)
 cmake_policy(SET CMP0075 NEW)
 cmake_policy(SET CMP0091 NEW)
 
-include(cmake/cmake-utilities.cmake)
+include(src/cmake/cmake-utilities.cmake)
 
 # silence RPATH cmake warning
 set(CMAKE_MACOSX_RPATH 1)
@@ -83,7 +83,7 @@ include(CheckCSourceCompiles)
 include(CheckCXXSourceCompiles)
 include(CMakePushCheckState)
 
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/Modules/)
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/src/cmake/Modules/)
 list(APPEND CMAKE_PREFIX_PATH /usr /usr/local /opt/local /sw)
 message(STATUS "CMake module path: ${CMAKE_MODULE_PATH}")
 
@@ -244,7 +244,7 @@ endif()
     endif()
 
 if(USE_COMPILER_OPTIMIZATIONS)
-    include(cmake/CompilerOptimizations.cmake)
+    include(src/cmake/CompilerOptimizations.cmake)
     message(STATUS  "USING COMPILER OPTIMISATIONS")
 else()
     message(STATUS  "NOT USING COMPILER OPTIMISATIONS")
@@ -546,7 +546,7 @@ endif()
 option(USE_ATOMIC_BUILTIN "Use Atomic Builtins if supported" ON)
 
 if(USE_ATOMIC_BUILTIN)
-    include(cmake/CheckAtomic.cmake)
+    include(src/cmake/CheckAtomic.cmake)
     if(HAVE_ATOMIC_BUILTIN)
         message(STATUS "Using atomic builtins.")
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DHAVE_ATOMIC_BUILTIN")
@@ -646,18 +646,18 @@ else()
 endif()
 
 list(APPEND libcsound_public_include_dirs
-    $<BUILD_INTERFACE:${Csound_SOURCE_DIR}>
-    $<BUILD_INTERFACE:${Csound_SOURCE_DIR}/include>
-    $<BUILD_INTERFACE:${Csound_SOURCE_DIR}/H>
-    $<BUILD_INTERFACE:${Csound_SOURCE_DIR}/Engine>
+    $<BUILD_INTERFACE:${Csound_SOURCE_DIR}/src>
+    $<BUILD_INTERFACE:${Csound_SOURCE_DIR}/src/include>
+    $<BUILD_INTERFACE:${Csound_SOURCE_DIR}/src/H>
+    $<BUILD_INTERFACE:${Csound_SOURCE_DIR}/src/Engine>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/src/include>
     $<INSTALL_INTERFACE:${_csound_install_interface_include_dir}>
 )
 
 list(APPEND libcsound_private_include_dirs
-    ${Csound_SOURCE_DIR}
-    "${Csound_SOURCE_DIR}/util"
+    ${Csound_SOURCE_DIR}/src
+    "${Csound_SOURCE_DIR}/src/util"
 )
 
 #checking pthread functions
@@ -701,9 +701,9 @@ elseif(USE_GIT_COMMIT)
     endif()
 endif()
 
-set_source_files_properties(Top/csound.c PROPERTIES COMPILE_FLAGS -DGIT_HASH_VALUE=${git_hash_values})
+set_source_files_properties(src/Top/csound.c PROPERTIES COMPILE_FLAGS -DGIT_HASH_VALUE=${git_hash_values})
 
-# Provide a configurable date token used by include/version.h.in.
+# Provide a configurable date token used by src/include/version.h.in.
 set(CS_PACKAGE_DATE_DEFINE "__DATE__")
 if(CSOUND_BUILD_DATE)
     string(STRIP "${CSOUND_BUILD_DATE}" csound_build_date_value)
@@ -713,334 +713,334 @@ endif()
 
 # The csound library
 set(libcsound_SRCS
-    Top/csound.c
-    Top/csound_perf.c
-    Top/csound_events.c
-    Top/csound_rtio.c
-    Top/csound_messages.c
-    Top/csound_time.c
-    Top/argdecode.c
-    Top/csound_debug.c
-    Top/csmodule.c
-    Top/getstring.c
-    Top/main.c
-    Top/new_opts.c
-    Top/one_file.c
-    Top/opcode.c
-    Top/threads.c
-    Top/utility.c
-    Top/threadsafe.c
-    Top/server.c
-    Engine/auxfd.c
-    Engine/cfgvar.c
-    Engine/corfiles.c
-    Engine/entry.c
-    Engine/extract.c
-    Engine/environ.c
-    Engine/fgens.c
-    Engine/filesys.c
-    Engine/insert.c
-    Engine/srconvert.c
-    Engine/udo.c
-    Engine/linevent.c
-    Engine/memalloc.c
-    Engine/memfiles.c
-    Engine/musmon.c
-    Engine/namedins.c
-    Engine/rdscor.c
-    Engine/scsort.c
-    Engine/scxtract.c
-    Engine/sort.c
-    Engine/sread.c
-    Engine/swritestr.c
-    Engine/twarp.c
-    Engine/csound_type_system.c
-    Engine/csound_standard_types.c
-    Engine/csound_data_structures.c
-    Engine/ugen.c
-    InOut/soundfile.c
-    InOut/libsnd.c
-    InOut/libsnd_u.c
-    InOut/midifile.c
-    InOut/midirecv.c
-    InOut/midisend.c
-    InOut/winascii.c
-    InOut/windin.c
-    InOut/window.c
-    InOut/winEPS.c
-    InOut/circularbuffer.c
-    OOps/array_ops.c
-    OOps/aops.c
-    OOps/assert_ops.c
-    OOps/bus.c
-    OOps/cmath.c
-    OOps/complex_ops.c
-    OOps/diskin2.c
-    OOps/disprep.c
-    OOps/dumpf.c
-    OOps/fftlib.c
-    OOps/inst_ops.c
-    OOps/lpred.c
-    OOps/pffft.c
-    OOps/goto_ops.c
-    OOps/midiinterop.c
-    OOps/midiops.c
-    OOps/midiops2.c
-    OOps/midiops3.c
-    OOps/midiout.c
-    OOps/mxfft.c
-    OOps/oscils.c
-    OOps/pitch0.c
-    OOps/pstream.c
-    OOps/pvfileio.c
-    OOps/pvsanal.c
-    OOps/random.c
-    OOps/readline.c
-    OOps/remote.c
-    OOps/schedule.c
-    OOps/sndinfUG.c
-    OOps/str_ops.c
-    OOps/structs.c
-    OOps/ugens1.c
-    OOps/ugens2.c
-    OOps/ugens3.c
-    OOps/ugens4.c
-    OOps/ugens5.c
-    OOps/ugens6.c
-    OOps/ugtabs.c
-    OOps/ugrw1.c
-    OOps/vdelay.c
-    OOps/compile_ops.c
+    src/Top/csound.c
+    src/Top/csound_perf.c
+    src/Top/csound_events.c
+    src/Top/csound_rtio.c
+    src/Top/csound_messages.c
+    src/Top/csound_time.c
+    src/Top/argdecode.c
+    src/Top/csound_debug.c
+    src/Top/csmodule.c
+    src/Top/getstring.c
+    src/Top/main.c
+    src/Top/new_opts.c
+    src/Top/one_file.c
+    src/Top/opcode.c
+    src/Top/threads.c
+    src/Top/utility.c
+    src/Top/threadsafe.c
+    src/Top/server.c
+    src/Engine/auxfd.c
+    src/Engine/cfgvar.c
+    src/Engine/corfiles.c
+    src/Engine/entry.c
+    src/Engine/extract.c
+    src/Engine/environ.c
+    src/Engine/fgens.c
+    src/Engine/filesys.c
+    src/Engine/insert.c
+    src/Engine/srconvert.c
+    src/Engine/udo.c
+    src/Engine/linevent.c
+    src/Engine/memalloc.c
+    src/Engine/memfiles.c
+    src/Engine/musmon.c
+    src/Engine/namedins.c
+    src/Engine/rdscor.c
+    src/Engine/scsort.c
+    src/Engine/scxtract.c
+    src/Engine/sort.c
+    src/Engine/sread.c
+    src/Engine/swritestr.c
+    src/Engine/twarp.c
+    src/Engine/csound_type_system.c
+    src/Engine/csound_standard_types.c
+    src/Engine/csound_data_structures.c
+    src/Engine/ugen.c
+    src/InOut/soundfile.c
+    src/InOut/libsnd.c
+    src/InOut/libsnd_u.c
+    src/InOut/midifile.c
+    src/InOut/midirecv.c
+    src/InOut/midisend.c
+    src/InOut/winascii.c
+    src/InOut/windin.c
+    src/InOut/window.c
+    src/InOut/winEPS.c
+    src/InOut/circularbuffer.c
+    src/OOps/array_ops.c
+    src/OOps/aops.c
+    src/OOps/assert_ops.c
+    src/OOps/bus.c
+    src/OOps/cmath.c
+    src/OOps/complex_ops.c
+    src/OOps/diskin2.c
+    src/OOps/disprep.c
+    src/OOps/dumpf.c
+    src/OOps/fftlib.c
+    src/OOps/inst_ops.c
+    src/OOps/lpred.c
+    src/OOps/pffft.c
+    src/OOps/goto_ops.c
+    src/OOps/midiinterop.c
+    src/OOps/midiops.c
+    src/OOps/midiops2.c
+    src/OOps/midiops3.c
+    src/OOps/midiout.c
+    src/OOps/mxfft.c
+    src/OOps/oscils.c
+    src/OOps/pitch0.c
+    src/OOps/pstream.c
+    src/OOps/pvfileio.c
+    src/OOps/pvsanal.c
+    src/OOps/random.c
+    src/OOps/readline.c
+    src/OOps/remote.c
+    src/OOps/schedule.c
+    src/OOps/sndinfUG.c
+    src/OOps/str_ops.c
+    src/OOps/structs.c
+    src/OOps/ugens1.c
+    src/OOps/ugens2.c
+    src/OOps/ugens3.c
+    src/OOps/ugens4.c
+    src/OOps/ugens5.c
+    src/OOps/ugens6.c
+    src/OOps/ugtabs.c
+    src/OOps/ugrw1.c
+    src/OOps/vdelay.c
+    src/OOps/compile_ops.c
 )
 
 
 set(vbap_ops
-    Opcodes/vbap.c
+    src/Opcodes/vbap.c
 )
 
 set(libcsound_static_SRCS  ${libcsound_SRCS})
 
 
-    set_source_files_properties(Opcodes/sfont.c PROPERTIES
+    set_source_files_properties(src/Opcodes/sfont.c PROPERTIES
         COMPILE_FLAGS -Wno-address-of-packed-member)
 
 set(physmod_SRCS
-    Opcodes/physutil.c
-    Opcodes/modal4.c
-    Opcodes/physmod.c
-    Opcodes/mandolin.c
-    Opcodes/singwave.c
-    Opcodes/fm4op.c
-    Opcodes/moog1.c
-    Opcodes/shaker.c
-    Opcodes/bowedbar.c
+    src/Opcodes/physutil.c
+    src/Opcodes/modal4.c
+    src/Opcodes/physmod.c
+    src/Opcodes/mandolin.c
+    src/Opcodes/singwave.c
+    src/Opcodes/fm4op.c
+    src/Opcodes/moog1.c
+    src/Opcodes/shaker.c
+    src/Opcodes/bowedbar.c
 )
 
 set(externs_SRCS
-    Opcodes/babo.c
-    Opcodes/bilbar.c
-    Opcodes/compress.c
-    Opcodes/eqfil.c
-    Opcodes/Vosim.c
-    Opcodes/squinewave.c
-    Opcodes/pinker.c
-    Opcodes/cpumeter.c
-    Opcodes/sc_noise.c
-    Opcodes/afilters.c
-    Opcodes/wpfilters.c
-    Opcodes/lufs.c
-    Opcodes/date.c
-    Opcodes/system_call.c
-    Opcodes/serial.c
-    Opcodes/counter.c
-    Opcodes/liveconv.c
-    Opcodes/sterrain.c
-    Opcodes/gammatone.c
-    Opcodes/sfont.c
-    Opcodes/gendy.c
-    Opcodes/phisem.c
-    Opcodes/framebuffer.c
-    Opcodes/cellular.c
-    Opcodes/exciter.c
-    Opcodes/buchla.c
-    Opcodes/select.c
-    Opcodes/platerev.c
-    Opcodes/sequencer.c
-    Opcodes/grain4.c
-    Opcodes/loscilx.c
-    Opcodes/minmax.c
-    Opcodes/pan2.c
-    Opcodes/vaops.c
-    Opcodes/ugakbari.c
-    Opcodes/harmon.c
-    Opcodes/pitchtrack.c
-    Opcodes/partikkel.c
-    Opcodes/shape.c
-    Opcodes/tabaudio.c
-    Opcodes/tabsum.c
-    Opcodes/crossfm.c
-    Opcodes/pvlock.c
-    Opcodes/fareyseq.c
-    Opcodes/modmatrix.c
-    Opcodes/scoreline.c
-    Opcodes/ambicode1.c
-    Opcodes/arrays.c
-    Opcodes/emugens/emugens.c
-    Opcodes/emugens/scugens.c
-    Opcodes/zak.c
-    Opcodes/paulstretch.c
+    src/Opcodes/babo.c
+    src/Opcodes/bilbar.c
+    src/Opcodes/compress.c
+    src/Opcodes/eqfil.c
+    src/Opcodes/Vosim.c
+    src/Opcodes/squinewave.c
+    src/Opcodes/pinker.c
+    src/Opcodes/cpumeter.c
+    src/Opcodes/sc_noise.c
+    src/Opcodes/afilters.c
+    src/Opcodes/wpfilters.c
+    src/Opcodes/lufs.c
+    src/Opcodes/date.c
+    src/Opcodes/system_call.c
+    src/Opcodes/serial.c
+    src/Opcodes/counter.c
+    src/Opcodes/liveconv.c
+    src/Opcodes/sterrain.c
+    src/Opcodes/gammatone.c
+    src/Opcodes/sfont.c
+    src/Opcodes/gendy.c
+    src/Opcodes/phisem.c
+    src/Opcodes/framebuffer.c
+    src/Opcodes/cellular.c
+    src/Opcodes/exciter.c
+    src/Opcodes/buchla.c
+    src/Opcodes/select.c
+    src/Opcodes/platerev.c
+    src/Opcodes/sequencer.c
+    src/Opcodes/grain4.c
+    src/Opcodes/loscilx.c
+    src/Opcodes/minmax.c
+    src/Opcodes/pan2.c
+    src/Opcodes/vaops.c
+    src/Opcodes/ugakbari.c
+    src/Opcodes/harmon.c
+    src/Opcodes/pitchtrack.c
+    src/Opcodes/partikkel.c
+    src/Opcodes/shape.c
+    src/Opcodes/tabaudio.c
+    src/Opcodes/tabsum.c
+    src/Opcodes/crossfm.c
+    src/Opcodes/pvlock.c
+    src/Opcodes/fareyseq.c
+    src/Opcodes/modmatrix.c
+    src/Opcodes/scoreline.c
+    src/Opcodes/ambicode1.c
+    src/Opcodes/arrays.c
+    src/Opcodes/emugens/emugens.c
+    src/Opcodes/emugens/scugens.c
+    src/Opcodes/zak.c
+    src/Opcodes/paulstretch.c
 )
 
 
 set(newgabops_SRCS
-    Opcodes/gab/tabmorph.c
-    Opcodes/gab/hvs.c
-    Opcodes/gab/newgabopc.c
+    src/Opcodes/gab/tabmorph.c
+    src/Opcodes/gab/hvs.c
+    src/Opcodes/gab/newgabopc.c
 )
 
 set(gens_SRCS
-    Opcodes/ftest.c
-    Opcodes/fareygen.c
-    Opcodes/quadbezier.c
+    src/Opcodes/ftest.c
+    src/Opcodes/fareygen.c
+    src/Opcodes/quadbezier.c
 )
 
 set(pitch_ops_SRCS
-    Opcodes/pitch.c
-    Opcodes/spectra.c
+    src/Opcodes/pitch.c
+    src/Opcodes/spectra.c
 )
 
 set(stdopcod_SRCS
-    Opcodes/ambicode.c
-    Opcodes/bbcut.c
-    Opcodes/biquad.c
-    Opcodes/butter.c
-    Opcodes/clfilt.c
-    Opcodes/cross2.c
-    Opcodes/dam.c
-    Opcodes/dcblockr.c
-    Opcodes/filter.c
-    Opcodes/flanger.c
-    Opcodes/follow.c
-    Opcodes/fout.c
-    Opcodes/freeverb.c
-    Opcodes/ftconv.c
-    Opcodes/ftgen.c
-    Opcodes/gab/gab.c
-    Opcodes/gab/vectorial.c
-    Opcodes/grain.c
-    Opcodes/locsig.c
-    Opcodes/lowpassr.c
-    Opcodes/metro.c
-    Opcodes/newfils.c
-    Opcodes/nlfilt.c
-    Opcodes/oscbnk.c
-    Opcodes/pluck.c
-    Opcodes/repluck.c
-    Opcodes/reverbsc.c
-    Opcodes/seqtime.c
-    Opcodes/sndloop.c
-    Opcodes/sndwarp.c
-    Opcodes/space.c
-    Opcodes/spat3d.c
-    Opcodes/syncgrain.c
-    Opcodes/ugens7.c
-    Opcodes/ugens9.c
-    Opcodes/ugensa.c
-    Opcodes/uggab.c
-    Opcodes/ugmoss.c
-    Opcodes/ugnorman.c
-    Opcodes/ugsc.c
-    Opcodes/wave-terrain.c
-    Opcodes/wterrain2.c
-    Opcodes/stdopcod.c
-    Opcodes/dbap.c
+    src/Opcodes/ambicode.c
+    src/Opcodes/bbcut.c
+    src/Opcodes/biquad.c
+    src/Opcodes/butter.c
+    src/Opcodes/clfilt.c
+    src/Opcodes/cross2.c
+    src/Opcodes/dam.c
+    src/Opcodes/dcblockr.c
+    src/Opcodes/filter.c
+    src/Opcodes/flanger.c
+    src/Opcodes/follow.c
+    src/Opcodes/fout.c
+    src/Opcodes/freeverb.c
+    src/Opcodes/ftconv.c
+    src/Opcodes/ftgen.c
+    src/Opcodes/gab/gab.c
+    src/Opcodes/gab/vectorial.c
+    src/Opcodes/grain.c
+    src/Opcodes/locsig.c
+    src/Opcodes/lowpassr.c
+    src/Opcodes/metro.c
+    src/Opcodes/newfils.c
+    src/Opcodes/nlfilt.c
+    src/Opcodes/oscbnk.c
+    src/Opcodes/pluck.c
+    src/Opcodes/repluck.c
+    src/Opcodes/reverbsc.c
+    src/Opcodes/seqtime.c
+    src/Opcodes/sndloop.c
+    src/Opcodes/sndwarp.c
+    src/Opcodes/space.c
+    src/Opcodes/spat3d.c
+    src/Opcodes/syncgrain.c
+    src/Opcodes/ugens7.c
+    src/Opcodes/ugens9.c
+    src/Opcodes/ugensa.c
+    src/Opcodes/uggab.c
+    src/Opcodes/ugmoss.c
+    src/Opcodes/ugnorman.c
+    src/Opcodes/ugsc.c
+    src/Opcodes/wave-terrain.c
+    src/Opcodes/wterrain2.c
+    src/Opcodes/stdopcod.c
+    src/Opcodes/dbap.c
     )
 
 set(sock_ops_SRCS
-    Opcodes/socksend.c
-    Opcodes/sockrecv.c
+    src/Opcodes/socksend.c
+    src/Opcodes/sockrecv.c
 )
 
 
 set(hrtf_ops_SRCS
-    Opcodes/hrtfopcodes.c
-    Opcodes/hrtfearly.c
-    Opcodes/hrtfreverb.c
-    Opcodes/hrtferX.c
+    src/Opcodes/hrtfopcodes.c
+    src/Opcodes/hrtfearly.c
+    src/Opcodes/hrtfreverb.c
+    src/Opcodes/hrtferX.c
 )
 
 set(cs_pvs_ops_SRCS
-    Opcodes/ifd.c
-    Opcodes/partials.c
-    Opcodes/psynth.c
-    Opcodes/pvsbasic.c
-    Opcodes/pvscent.c
-    Opcodes/pvsdemix.c
-    Opcodes/pvs_ops.c
-    Opcodes/pvsband.c
-    Opcodes/pvsbuffer.c
-    Opcodes/pvsgendy.c
+    src/Opcodes/ifd.c
+    src/Opcodes/partials.c
+    src/Opcodes/psynth.c
+    src/Opcodes/pvsbasic.c
+    src/Opcodes/pvscent.c
+    src/Opcodes/pvsdemix.c
+    src/Opcodes/pvs_ops.c
+    src/Opcodes/pvsband.c
+    src/Opcodes/pvsbuffer.c
+    src/Opcodes/pvsgendy.c
     )
 
 set(oldpvoc_SRCS
-    Opcodes/dsputil.c
-    Opcodes/pvadd.c
-    Opcodes/pvinterp.c
-    Opcodes/pvocext.c
-    Opcodes/pvread.c
-    Opcodes/ugens8.c
-    Opcodes/vpvoc.c
-    Opcodes/pvoc.c
+    src/Opcodes/dsputil.c
+    src/Opcodes/pvadd.c
+    src/Opcodes/pvinterp.c
+    src/Opcodes/pvocext.c
+    src/Opcodes/pvread.c
+    src/Opcodes/ugens8.c
+    src/Opcodes/vpvoc.c
+    src/Opcodes/pvoc.c
 )
 
 set(scanops_SRCS
-    Opcodes/scansyn.c
-    Opcodes/scansynx.c
+    src/Opcodes/scansyn.c
+    src/Opcodes/scansynx.c
 )
 
 set(unixops_SRCS
-    Opcodes/control.c
-    Opcodes/urandom.c
+    src/Opcodes/control.c
+    src/Opcodes/urandom.c
 )
 
 set(mp3in_SRCS
-    Opcodes/mp3in.c
-    InOut/libmpadec/layer1.c
-    InOut/libmpadec/layer2.c
-    InOut/libmpadec/layer3.c
-    InOut/libmpadec/synth.c
-    InOut/libmpadec/tables.c
-    InOut/libmpadec/mpadec.c
-    InOut/libmpadec/mp3dec.c)
+    src/Opcodes/mp3in.c
+    src/InOut/libmpadec/layer1.c
+    src/InOut/libmpadec/layer2.c
+    src/InOut/libmpadec/layer3.c
+    src/InOut/libmpadec/synth.c
+    src/InOut/libmpadec/tables.c
+    src/InOut/libmpadec/mpadec.c
+    src/InOut/libmpadec/mp3dec.c)
 
 
 if(NOT CMAKE_SYSTEM_NAME_UPPER STREQUAL "WASI")
     # Full set of C++ opcodes for non-WASI builds
     set(cppops_SRCS
-       Opcodes/ampmidid.cpp
-       Opcodes/mixer.cpp
-       Opcodes/bformdec2.cpp
-       Opcodes/doppler.cpp
-       Opcodes/ftsamplebank.cpp
-       Opcodes/padsynth_gen.cpp
-       Opcodes/signalflowgraph.cpp
-       Opcodes/arrayops.cpp
-       Opcodes/lfsr.cpp
-       Opcodes/pvsops.cpp
-       Opcodes/trigEnvSegs.cpp
-       Opcodes/tl/fractalnoise.cpp
+       src/Opcodes/ampmidid.cpp
+       src/Opcodes/mixer.cpp
+       src/Opcodes/bformdec2.cpp
+       src/Opcodes/doppler.cpp
+       src/Opcodes/ftsamplebank.cpp
+       src/Opcodes/padsynth_gen.cpp
+       src/Opcodes/signalflowgraph.cpp
+       src/Opcodes/arrayops.cpp
+       src/Opcodes/lfsr.cpp
+       src/Opcodes/pvsops.cpp
+       src/Opcodes/trigEnvSegs.cpp
+       src/Opcodes/tl/fractalnoise.cpp
     )
 else()
     # Limited C++ opcodes for WASI builds
     set(cppops_SRCS
-        Opcodes/arrayops.cpp
-        Opcodes/bformdec2.cpp
-        Opcodes/ftsamplebank.cpp
-        Opcodes/padsynth_gen.cpp
-        Opcodes/pvsops.cpp
-        Opcodes/signalflowgraph.cpp
-        Opcodes/tl/fractalnoise.cpp
-        Opcodes/trigEnvSegs.cpp)
+        src/Opcodes/arrayops.cpp
+        src/Opcodes/bformdec2.cpp
+        src/Opcodes/ftsamplebank.cpp
+        src/Opcodes/padsynth_gen.cpp
+        src/Opcodes/pvsops.cpp
+        src/Opcodes/signalflowgraph.cpp
+        src/Opcodes/tl/fractalnoise.cpp
+        src/Opcodes/trigEnvSegs.cpp)
 endif()
 
 list(APPEND libcsound_SRCS)
@@ -1073,21 +1073,21 @@ endif()
 endif()
 
 if(BUILD_PERFTHREAD_CLASS AND NOT CMAKE_SYSTEM_NAME_UPPER STREQUAL "WASI")
-    list(APPEND libcsound_SRCS "Top/csPerfThread.cpp")
-    list(APPEND libcsound_static_SRCS "Top/csPerfThread.cpp")
+    list(APPEND libcsound_SRCS "src/Top/csPerfThread.cpp")
+    list(APPEND libcsound_static_SRCS "src/Top/csPerfThread.cpp")
 endif()
 
 # Handling New Parser
-set(YACC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/Engine/csound_orc.y)
+set(YACC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/Engine/csound_orc.y)
 set(YACC_OUT ${CMAKE_CURRENT_BINARY_DIR}/csound_orcparse.c)
 set(YACC_OUTH ${CMAKE_CURRENT_BINARY_DIR}/csound_orcparse.h)
 
-set(LEX_SRC ${CMAKE_CURRENT_SOURCE_DIR}/Engine/csound_orc.lex)
+set(LEX_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/Engine/csound_orc.lex)
 set(LEX_OUT ${CMAKE_CURRENT_BINARY_DIR}/csound_orclex.c)
 set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/csound_orclex.c
     PROPERTIES COMPILE_FLAGS "-Wno-implicit-fallthrough -Wno-misleading-indentation")
 
-set(PRELEX_SRC ${CMAKE_CURRENT_SOURCE_DIR}/Engine/csound_pre.lex)
+set(PRELEX_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/Engine/csound_pre.lex)
 set(PRELEX_OUT ${CMAKE_CURRENT_BINARY_DIR}/csound_prelex.c)
 set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/csound_prelex.c
     PROPERTIES COMPILE_FLAGS "-Wno-implicit-fallthrough")
@@ -1123,23 +1123,23 @@ add_custom_command(
 
 list(APPEND libcsound_SRCS
     ${LEX_OUT} ${YACC_OUT} ${PRELEX_OUT}
-    Engine/csound_orc_semantics.c
-    Engine/csound_orc_expressions.c
-    Engine/csound_orc_optimize.c
-    Engine/csound_orc_compile.c
-    Engine/csound_orc_structs.c
-    Engine/new_orc_parser.c
-    Engine/symbtab.c)
+    src/Engine/csound_orc_semantics.c
+    src/Engine/csound_orc_expressions.c
+    src/Engine/csound_orc_optimize.c
+    src/Engine/csound_orc_compile.c
+    src/Engine/csound_orc_structs.c
+    src/Engine/new_orc_parser.c
+    src/Engine/symbtab.c)
 
 list(APPEND libcsound_static_SRCS
     ${LEX_OUT} ${YACC_OUT} ${PRELEX_OUT}
-    Engine/csound_orc_semantics.c
-    Engine/csound_orc_expressions.c
-    Engine/csound_orc_optimize.c
-    Engine/csound_orc_compile.c
-    Engine/csound_orc_structs.c
-    Engine/new_orc_parser.c
-    Engine/symbtab.c)
+    src/Engine/csound_orc_semantics.c
+    src/Engine/csound_orc_expressions.c
+    src/Engine/csound_orc_optimize.c
+    src/Engine/csound_orc_compile.c
+    src/Engine/csound_orc_structs.c
+    src/Engine/new_orc_parser.c
+    src/Engine/symbtab.c)
 
 
 set_source_files_properties(${YACC_OUT} GENERATED)
@@ -1152,14 +1152,14 @@ set_source_files_properties(${PRELEX_OUT} GENERATED)
 
 ##list(APPEND libcsound_CFLAGS -DSCORE_PARSER)
 
-#set(YACC_SCOSRC ${CMAKE_CURRENT_SOURCE_DIR}/Engine/csound_sco.y)
+#set(YACC_SCOSRC ${CMAKE_CURRENT_SOURCE_DIR}/src/Engine/csound_sco.y)
 #set(YACC_SCOOUT ${CMAKE_CURRENT_BINARY_DIR}/csound_scoparse.c)
 #set(YACC_SCOOUTH ${CMAKE_CURRENT_BINARY_DIR}/csound_scoparse.h)
 
-#set(LEX_SCOSRC ${CMAKE_CURRENT_SOURCE_DIR}/Engine/csound_sco.lex)
+#set(LEX_SCOSRC ${CMAKE_CURRENT_SOURCE_DIR}/src/Engine/csound_sco.lex)
 #set(LEX_SCOOUT ${CMAKE_CURRENT_BINARY_DIR}/csound_scolex.c)
 
-set(PRELEX_SCOSRC ${CMAKE_CURRENT_SOURCE_DIR}/Engine/csound_prs.lex)
+set(PRELEX_SCOSRC ${CMAKE_CURRENT_SOURCE_DIR}/src/Engine/csound_prs.lex)
 set(PRELEX_SCOOUT ${CMAKE_CURRENT_BINARY_DIR}/csound_prslex.c)
 
 ##message("${CMAKE_CURRENT_BINARY_DIR}/csound_prslex.c")
@@ -1206,14 +1206,14 @@ if(BUILD_MULTI_CORE)
     message(STATUS "Building with multicore support.")
 
     list(APPEND libcsound_SRCS
-        Engine/cs_new_dispatch.c
-        Engine/cs_par_base.c
-        Engine/cs_par_orc_semantic_analysis.c)
+        src/Engine/cs_new_dispatch.c
+        src/Engine/cs_par_base.c
+        src/Engine/cs_par_orc_semantic_analysis.c)
 
     list(APPEND libcsound_static_SRCS
-        Engine/cs_new_dispatch.c
-        Engine/cs_par_base.c
-        Engine/cs_par_orc_semantic_analysis.c)
+        src/Engine/cs_new_dispatch.c
+        src/Engine/cs_par_base.c
+        src/Engine/cs_par_orc_semantic_analysis.c)
 
     list(APPEND libcsound_CFLAGS -DPARCS)
 
@@ -1231,12 +1231,12 @@ endif()
 set(CSOUNDLIB_STATIC "${CSOUNDLIB}-static")
 
 # ADDING HERE TO GRAB LIST OF HEADERS IN CASE OF BUILDING OSX FRAMEWORK
-add_subdirectory(include)
+add_subdirectory(src/include)
 
 if(APPLE)
-    string(REGEX REPLACE "([^;]+)(;|$)" "include/\\1\\2" csheaders "${csheaders}")
-    file(GLOB H_headers "${CMAKE_CURRENT_SOURCE_DIR}/H/*.h")
-    set(libcsound_SRCS "${libcsound_SRCS};${csheaders};${H_headers};${CMAKE_CURRENT_BINARY_DIR}/include/float-version.h;${CMAKE_CURRENT_BINARY_DIR}/include/version.h")
+    string(REGEX REPLACE "([^;]+)(;|$)" "src/include/\\1\\2" csheaders "${csheaders}")
+    file(GLOB H_headers "${CMAKE_CURRENT_SOURCE_DIR}/src/H/*.h")
+    set(libcsound_SRCS "${libcsound_SRCS};${csheaders};${H_headers};${CMAKE_CURRENT_BINARY_DIR}/src/include/float-version.h;${CMAKE_CURRENT_BINARY_DIR}/src/include/version.h")
 endif()
 
 
@@ -1255,7 +1255,7 @@ if(APPLE)
         set_target_properties(${CSOUNDLIB} PROPERTIES FRAMEWORK YES)
         set_target_properties(${CSOUNDLIB} PROPERTIES FRAMEWORK_VERSION "${APIVERSION}")
         set_target_properties(${CSOUNDLIB} PROPERTIES PUBLIC_HEADER
-            "${csheaders};${CMAKE_CURRENT_BINARY_DIR}/include/float-version.h;${CMAKE_CURRENT_BINARY_DIR}/include/version.h"
+            "${csheaders};${CMAKE_CURRENT_BINARY_DIR}/src/include/float-version.h;${CMAKE_CURRENT_BINARY_DIR}/src/include/version.h"
         )
 endif()
 
@@ -1452,10 +1452,10 @@ if(BUILD_STATIC_LIBRARY AND NOT BARE_METAL)
         ARCHIVE DESTINATION "${LIBRARY_INSTALL_DIR}")
 endif()
 
-add_subdirectory(Opcodes)
-add_subdirectory(InOut)
-add_subdirectory(Frontends)
-add_subdirectory(util)
+add_subdirectory(src/Opcodes)
+add_subdirectory(src/InOut)
+add_subdirectory(src/frontend)
+add_subdirectory(src/util)
 add_subdirectory(tests/c)
 add_subdirectory(tests/commandline)
 add_subdirectory(tests/regression)
@@ -1463,7 +1463,7 @@ add_subdirectory(tests/soak)
 
 # uninstall target
 configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_uninstall.cmake.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/cmake_uninstall.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
     IMMEDIATE @ONLY)
 
@@ -1508,7 +1508,7 @@ endif()
 
 # generate relocatable CsoundConfig.cmake from template
 configure_package_config_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CsoundConfig.cmake.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/CsoundConfig.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/CsoundConfig.cmake"
     INSTALL_DESTINATION "share/csound"
 )
@@ -1527,7 +1527,7 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/CsoundConfigVersion.cmake"
 )
 
 # install FindCsound.cmake for projects using Module mode
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindCsound.cmake"
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/FindCsound.cmake"
     DESTINATION "share/csound"
 )
 

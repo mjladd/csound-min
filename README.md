@@ -10,7 +10,7 @@ packaging for several systems. All of that is removed here. The engine, all
 
 Start with [ARCHITECTURE.md](ARCHITECTURE.md), a reading map of the engine.
 [BUILD.md](BUILD.md) has the build and the render commands.
-[tools/README.md](tools/README.md) records how the cut was made and how to
+[src/tools/README.md](src/tools/README.md) records how the cut was made and how to
 prove that a change leaves the audio alone.
 
 This is a personal learning fork. It does not track upstream, and it is not a
@@ -37,7 +37,7 @@ an audio device.
 
 The [Csound Reference Manual](http://docs.csound.com) documents every opcode.
 The [API reference](http://csound.github.io/docs/api/index.html) documents the
-C interface in `include/csound.h`.
+C interface in `src/include/csound.h`.
 
 # LICENSE
 
