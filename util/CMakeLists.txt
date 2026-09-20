@@ -36,12 +36,7 @@ if(BUILD_UTILITIES)
     make_utility(mkir    mkir_main.c)
     
     if (BUILD_SRC_CONV AND USE_LIBSAMPLERATE)
-        if (USE_VCPKG)
-            find_package(SampleRate CONFIG REQUIRED)
-            assign_bool(SampleRate_FOUND TARGET SampleRate::samplerate)
-        else()
             find_package(SampleRate MODULE)
-        endif()
     endif()
 
     check_deps(BUILD_SRC_CONV USE_LIBSNDFILE SampleRate_FOUND)

@@ -1,60 +1,54 @@
-# CSOUND
-Version 7.0.0 (beta)
+# csound-min
 
-This is the develop branch of the Csound main code repository. The
-latest beta release installers for MacOS, iOS, and Windows can be
-downloaded from the relevant
-[github actions page](https://github.com/csound/csound/actions/workflows/csound_builds.yml).
-Selecting the latest develop build brings a page with the download
-artefacts at the bottom.
+A pruned fork of [Csound](https://github.com/csound/csound) 7.0.0 beta, cut
+down to the engine and the command line program, for Linux and macOS only.
 
-The develop branch of this repository contains Csound version 7.x.
-Anyone seeking the latest 6.x version please checkout the csound6
-branch (or the master branch, containing the latest and final release
-of this version). Note that 6.x is EOL and no more releases of that
-version are planned.
+This fork exists to be read. Upstream Csound carries ports for iOS, Android,
+WebAssembly, Bela, Daisy and Zynq, bindings for Java, Python and Lisp, and
+packaging for several systems. All of that is removed here. The engine, all
+1,821 opcodes and the analysis utilities are kept unchanged.
 
-![Build Status](https://github.com/csound/csound/actions/workflows/csound_builds.yml/badge.svg?branch=develop)
-<!--- ![Coverity Status](https://scan.coverity.com/projects/1822/badge.svg) --->
-A sound and music computing system.
+Start with [ARCHITECTURE.md](ARCHITECTURE.md), a reading map of the engine.
+[BUILD.md](BUILD.md) has the build and the render commands.
+[tools/README.md](tools/README.md) records how the cut was made and how to
+prove that a change leaves the audio alone.
+[RUST_MIGRATION_PLAN.md](RUST_MIGRATION_PLAN.md) records why this is a prune
+and not a rewrite.
 
-Csound is copyright (c) 1991-2024 The Csound Developers, see CONTRIBUTORS
+This is a personal learning fork. It does not track upstream, and it is not a
+place to send patches. Send those to
+[csound/csound](https://github.com/csound/csound).
 
-Csound is free software; you can redistribute them
-and/or modify them under the terms of the GNU Lesser General Public
-License as published by the Free Software Foundation; either
-version 2.1 of the License, or (at your option) any later version.
+# WHAT IS CSOUND
 
-Csound is distributed in the hope that they will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
+A sound and music computing system, first written by Barry Vercoe at MIT in
+1986, with roots in the Music N languages going back to 1957.
 
-You should have received a copy of the GNU Lesser General Public
-License along with this software; if not, write to the Free Software
-Foundation, Inc., 31 Milk Street, #960789, Boston, MA, 02196, USA
+You write an orchestra, which declares instruments out of opcodes, and a
+score, which says when to play them. Csound renders the result to a file or to
+an audio device.
 
-# GETTING STARTED
+The [Csound Reference Manual](http://docs.csound.com) documents every opcode.
+The [API reference](http://csound.github.io/docs/api/index.html) documents the
+C interface in `include/csound.h`.
 
-This repository contains the code for the core Csound library
-and the command-line interface frontend. It also
-contains specific code for ports to various embedded, 
-mobile and web platforms.
+# LICENSE
 
-For general project information, please look at http://csound.com,
-where all details about Csound, what it does, its history, music
-made with it, and many other things can be found.
+Csound is copyright (c) 1991-2024 The Csound Developers, see CONTRIBUTORS.
 
-The Csound Reference Manual can be found online at http://docs.csound.com.
+Csound is free software; you can redistribute it and/or modify it under the
+terms of the GNU Lesser General Public License as published by the Free
+Software Foundation, either version 2.1 of the License, or, at your option,
+any later version.
 
-The Csound API application programming interface reference 
-may be found online at http://csound.github.io/docs/api/index.html.
+Csound is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY, without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more
+details.
 
-Information on how to build Csound on various platforms is given in
-the BUILD.md file at the top level directory of this repository.
-
-Information about build pipelines with Azure and Github actions is given in
-[DockerFiles/Readme.md](DockerFiles/ReadMe.md).
+You should have received a copy of the GNU Lesser General Public License along
+with this software. If not, write to the Free Software Foundation, Inc.,
+31 Milk Street, #960789, Boston, MA, 02196, USA.
 
 # CONTRIBUTORS
 

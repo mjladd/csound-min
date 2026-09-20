@@ -123,9 +123,6 @@ check_deps(BUILD_OSC_OPCODES LibLO_FOUND)
 if(BUILD_OSC_OPCODES)
     make_plugin(osc "OSC.c;osc_blob.c")
     target_link_libraries(osc PRIVATE LibLO::liblo Threads::Threads)
-    if(WIN32)
-      target_link_libraries(osc PRIVATE wsock32 ws2_32 iphlpapi)
-    endif()
 endif()
 
 ## deprecated opcodes ##

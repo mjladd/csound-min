@@ -1,3 +1,0 @@
-# DaisyCsoundGenerative
-
-DaisyCsound Generative example.
