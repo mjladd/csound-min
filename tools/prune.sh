@@ -41,10 +41,56 @@ say "step 5c: unreferenced files at the repository root"
 # INSTALLING points at releases this fork does not publish.
 # README.md.in is a template CMake used to overwrite README.md.
 rm -f longline.c all_string_files INSTALLING README.md.in
+# examples is in no build. config.doxygen only fed the BUILD_DOCS target.
+rm -rf examples config.doxygen
+# dependencies is a 2011 macOS 10.7 dependency builder. format.sh drives
+# an optional formatting target. Custom.cmake.ex is a stale sample for the
+# Custom.cmake hook, which stays.
+rm -rf dependencies format.sh Custom.cmake.ex
 rm -rf Release_Notes doc/How_to_Build_Csound_on_Windows.doc
 # etc holds a 2012 ChangeLog and a .csoundrc sample. Csound 7 reads
 # .csound7rc from $HOME or the current directory, never from etc.
 rm -rf etc
+
+say "step 5f: drop the code formatting target"
+python3 - <<'PY_INNER'
+import pathlib
+p = pathlib.Path("CMakeLists.txt")
+text = p.read_text()
+target = """add_custom_target(format sh format.sh  Top/*.c  Top/*.cpp  Engine/*.c
+    OOps/*.c Opcodes/*.c  Opcodes/*.cpp Opcodes/*/*.c  Opcodes/*/*.cpp
+    util/*.c WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+"""
+if target not in text:
+    raise SystemExit("CMakeLists.txt: format target not found")
+text = text.replace(target, "")
+# Left over from pruning the Windows cross build.
+text = text.replace("# install mingw libraries\n\n", "")
+p.write_text(text)
+print("removed the format target and the stale mingw comment")
+PY_INNER
+
+say "step 5e: drop the doxygen documentation target"
+python3 - <<'PY_INNER'
+import pathlib, re
+p = pathlib.Path("CMakeLists.txt")
+text = p.read_text()
+start = text.find("# Documentation\nif(BUILD_DOCS)")
+if start < 0:
+    raise SystemExit("CMakeLists.txt: BUILD_DOCS block not found")
+end = text.find('message(STATUS "Not building documentation")\nendif()\n', start)
+if end < 0:
+    raise SystemExit("CMakeLists.txt: end of BUILD_DOCS block not found")
+end += len('message(STATUS "Not building documentation")\nendif()\n')
+while text[end] == "\n":
+    end += 1
+text = text[:start] + text[end:]
+text, n = re.subn(r"^option\(BUILD_DOCS\b.*?\n", "", text, flags=re.M)
+if n != 1:
+    raise SystemExit("expected one BUILD_DOCS option, found %d" % n)
+p.write_text(text)
+print("removed the BUILD_DOCS option and its doxygen block")
+PY_INNER
 
 say "step 5d: stop CMake overwriting README.md from its template"
 python3 - <<'PY_INNER'
