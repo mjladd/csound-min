@@ -305,29 +305,24 @@
   "status": "ok"
  },
  "chnclear": {
-  "bytes": 0,
-  "sha256": null,
-  "status": "no-output(rc=1)"
+  "bytes": 7056128,
+  "sha256": "cacbabe10af0016dfca9fabdb26171ed52db6b9b7ec13428cfc557ea9efe669b",
+  "status": "ok"
  },
  "chnget": {
-  "bytes": 0,
-  "sha256": null,
-  "status": "no-output(rc=1)"
+  "bytes": 7056128,
+  "sha256": "cacbabe10af0016dfca9fabdb26171ed52db6b9b7ec13428cfc557ea9efe669b",
+  "status": "ok"
  },
  "chnmix": {
-  "bytes": 0,
-  "sha256": null,
-  "status": "no-output(rc=1)"
+  "bytes": 7056128,
+  "sha256": "cacbabe10af0016dfca9fabdb26171ed52db6b9b7ec13428cfc557ea9efe669b",
+  "status": "ok"
  },
  "chnset": {
-  "bytes": 0,
-  "sha256": null,
-  "status": "no-output(rc=1)"
- },
- "chuap": {
-  "bytes": 0,
-  "sha256": null,
-  "status": "no-output(rc=1)"
+  "bytes": 7056128,
+  "sha256": "cacbabe10af0016dfca9fabdb26171ed52db6b9b7ec13428cfc557ea9efe669b",
+  "status": "ok"
  },
  "cigoto": {
   "bytes": 352800,
@@ -509,20 +504,10 @@
   "sha256": "ac2d16b4ed00334bebd2862cacef92fee5ec94919d1896404c62887e6b7557e1",
   "status": "ok"
  },
- "crossfm": {
-  "bytes": 0,
-  "sha256": null,
-  "status": "no-output(rc=1)"
- },
  "crunch": {
   "bytes": 705536,
   "sha256": "7088a145835f6e8bd8f199ec839766a1ab005fd7915e9c7dbdceed8c0a4efeae",
   "status": "ok"
- },
- "csbeats": {
-  "bytes": 0,
-  "sha256": null,
-  "status": "no-output(rc=1)"
  },
  "cuserrnd": {
   "bytes": 705536,
@@ -1509,11 +1494,6 @@
   "sha256": "af1e85f657b3cc53dd5ba6f1c350159fb4d396b9c48a80189a28abbcc002467f",
   "status": "ok"
  },
- "imageopcodesdemo2": {
-  "bytes": 0,
-  "sha256": null,
-  "status": "no-output(rc=1)"
- },
  "include": {
   "bytes": 352800,
   "sha256": "af89f8c8eb46a75813d7aa0626fd94408af0270055fc3eaffb8b03f25838028e",
@@ -2023,11 +2003,6 @@
   "bytes": 3527936,
   "sha256": "50c591f24cd22c2317c3439bac91813ca6d3c6e43b492108b605d2926e0239a0",
   "status": "ok"
- },
- "noise-2": {
-  "bytes": 0,
-  "sha256": null,
-  "status": "no-output(rc=1)"
  },
  "notequal": {
   "bytes": 176384,
