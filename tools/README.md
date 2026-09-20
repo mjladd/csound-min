@@ -44,3 +44,23 @@ false-symbol list is empty. That test is the reason to trust it. Run the
 prune against an upstream checkout with:
 
     bash tools/prune.sh /path/to/fresh/csound tools/prune_cmake.py
+
+## tests/difftest-baseline.json
+
+The reference hashes, recorded from the unpruned upstream tree at commit
+0a6182700 before anything was deleted. Built on Linux, x86-64, gcc 13.3,
+double precision samples, with AVX2 on.
+
+Of the 815 files in the curated list, 584 rendered reproducibly, one was
+nondeterministic, and 230 already failed upstream for reasons unrelated to
+this fork, such as needing a MIDI device or a missing sample file.
+
+The pruned tree in this repository reproduces all 584 sample for sample.
+Compare against it with:
+
+    python3 tools/difftest.py compare \
+        --csound build/csound --plugin-dir build \
+        --suite tests/soak --baseline tests/difftest-baseline.json
+
+The hashes depend on the compiler, the CPU and the build options. A different
+machine needs its own baseline, recorded with `record` before any change.
