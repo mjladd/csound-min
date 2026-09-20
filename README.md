@@ -12,12 +12,19 @@ Start with [ARCHITECTURE.md](ARCHITECTURE.md), a reading map of the engine.
 [BUILD.md](BUILD.md) has the build and the render commands.
 [tools/README.md](tools/README.md) records how the cut was made and how to
 prove that a change leaves the audio alone.
-[RUST_MIGRATION_PLAN.md](RUST_MIGRATION_PLAN.md) records why this is a prune
-and not a rewrite.
 
 This is a personal learning fork. It does not track upstream, and it is not a
 place to send patches. Send those to
 [csound/csound](https://github.com/csound/csound).
+
+# INSTALLING
+
+This fork publishes no binaries. Build it from source. `BUILD.md` lists the
+packages you need and the two commands that build it.
+
+Upstream Csound does publish prebuilt binaries for Linux on Intel, Windows and
+macOS. Take those from https://github.com/csound/csound/releases when you want
+a supported install rather than this reading copy.
 
 # WHAT IS CSOUND
 
