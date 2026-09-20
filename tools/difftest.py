@@ -24,17 +24,38 @@ from pathlib import Path
 RENDER_FLAGS = ["-d", "-m0", "-h", "-f"]
 
 
-def render(csound, plugin_dir, csd, workdir, timeout):
+def sample_path(suite, extra):
+    """Directories Csound searches for input audio and analysis files.
+
+    Many csd files in tests/soak name an input such as "fox.wav" that lives
+    in a sibling directory. Without those directories on the path the file
+    fails to open and the test looks broken.
+    """
+    dirs = [suite]
+    root = suite.parent.parent
+    for candidate in (suite.parent / "commandline", suite.parent / "regression",
+                      root / "samples", root / "tests" / "commandline",
+                      root / "tests" / "regression"):
+        if candidate.is_dir() and candidate not in dirs:
+            dirs.append(candidate)
+    for candidate in extra:
+        candidate = Path(candidate).resolve()
+        if candidate.is_dir() and candidate not in dirs:
+            dirs.append(candidate)
+    return os.pathsep.join(str(d) for d in dirs)
+
+
+def render(csound, plugin_dir, csd, workdir, timeout, search):
     """Render one csd to raw float samples. Returns (status, sha256, nbytes)."""
     out = workdir / (csd.stem + ".raw")
     if out.exists():
         out.unlink()
     env = dict(os.environ)
     env["OPCODE7DIR64"] = str(plugin_dir)
-    env["SSDIR"] = str(csd.parent)
-    env["SADIR"] = str(csd.parent)
+    env["SSDIR"] = search
+    env["SADIR"] = search
     env["SFDIR"] = str(workdir)
-    env["INCDIR"] = str(csd.parent)
+    env["INCDIR"] = search
     cmd = [str(csound)] + RENDER_FLAGS + ["-o", str(out), csd.name]
     try:
         proc = subprocess.run(
@@ -90,6 +111,10 @@ def main():
     ap.add_argument("--timeout", type=int, default=30)
     ap.add_argument("--all", action="store_true",
                     help="render every csd, not just the curated list")
+    ap.add_argument("--sample-path", action="append", default=[],
+                    metavar="DIR",
+                    help="extra directory to search for input audio; "
+                         "repeatable")
     args = ap.parse_args()
 
     suite = Path(args.suite).resolve()
@@ -103,13 +128,20 @@ def main():
     if not files:
         sys.exit("no csd files found in %s" % suite)
 
+    search = sample_path(suite, args.sample_path)
+    print("sample search path:")
+    for entry in search.split(os.pathsep):
+        print("   ", entry)
+    print()
     workdir = Path(tempfile.mkdtemp(prefix="difftest."))
     try:
         if args.mode == "record":
             manifest = {}
             for i, csd in enumerate(files, 1):
-                s1, h1, n1 = render(csound, plugin_dir, csd, workdir, args.timeout)
-                s2, h2, _ = render(csound, plugin_dir, csd, workdir, args.timeout)
+                s1, h1, n1 = render(csound, plugin_dir, csd, workdir,
+                                    args.timeout, search)
+                s2, h2, _ = render(csound, plugin_dir, csd, workdir,
+                                   args.timeout, search)
                 if s1 == "ok" and s2 == "ok" and h1 != h2:
                     status = "nondeterministic"
                 elif s1 != s2:
@@ -141,7 +173,8 @@ def main():
             if ref["status"] != "ok":
                 skipped.append((csd.stem, "baseline " + ref["status"]))
                 continue
-            status, sha, nbytes = render(csound, plugin_dir, csd, workdir, args.timeout)
+            status, sha, nbytes = render(csound, plugin_dir, csd, workdir,
+                                         args.timeout, search)
             compared += 1
             if status == "ok" and sha == ref["sha256"]:
                 matched += 1
