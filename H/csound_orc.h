@@ -1,0 +1,66 @@
+/*
+    csound_orc.h:
+
+    Copyright (C) 2007, 2017 by Stee Yi ad John ffitch
+
+    This file is part of Csound.
+
+    The Csound Library is free software; you can redistribute it
+    and/or modify it under the terms of the GNU Lesser General Public
+    License as published by the Free Software Foundation; either
+    version 2.1 of the License, or (at your option) any later version.
+
+    Csound is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public
+    License along with Csound; if not, write to the Free Software
+    Foundation, Inc., 31 Milk Street, #960789, Boston, MA, 02196, USA
+*/
+
+#ifndef __CSOUND_ORC_H
+
+#define __CSOUND_ORC_H
+
+#define YYDEBUG 1
+
+#include "parse_param.h"
+#include "score_param.h"
+#include "tok.h"
+#include "csound_orcparse.h"
+#include "csoundCore.h"
+
+enum {
+  S_ANDTHEN = T_HIGHEST+1,
+  S_APPLY,
+};
+
+typedef struct type_table {
+    OENTRY* udos;
+    CS_VAR_POOL* globalPool;
+    CS_VAR_POOL* instr0LocalPool;
+    CS_VAR_POOL* localPool;
+    CONS_CELL* labelList;
+} TYPE_TABLE;
+
+
+#ifndef PARSER_DEBUG
+
+#define PARSER_DEBUG (0)
+#endif
+
+TREE* make_node(CSOUND *, int32_t, uint64_t, int32_t, TREE*, TREE*);
+TREE* make_leaf(CSOUND *, int32_t, uint64_t, int32_t, ORCTOKEN*);
+ORCTOKEN* make_int(CSOUND *,char *, void*);
+ORCTOKEN* make_num(CSOUND *,char *, void *);
+ORCTOKEN *make_token(CSOUND *csound, char *s, void *);
+TREE* copy_node(CSOUND*, TREE*);
+extern void csp_orc_sa_print_list(CSOUND*);
+
+void query_deprecated_opcode(CSOUND *, ORCTOKEN *);
+int32_t  query_reversewrite_opcode(CSOUND *, ORCTOKEN *);
+
+
+#endif

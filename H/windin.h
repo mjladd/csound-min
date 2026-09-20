@@ -1,0 +1,35 @@
+/*
+    windin.h:
+
+    Copyright (C) 1991 Barry Vercoe, John ffitch
+
+    This file is part of Csound.
+
+    The Csound Library is free software; you can redistribute it
+    and/or modify it under the terms of the GNU Lesser General Public
+    License as published by the Free Software Foundation; either
+    version 2.1 of the License, or (at your option) any later version.
+
+    Csound is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public
+    License along with Csound; if not, write to the Free Software
+    Foundation, Inc., 31 Milk Street, #960789, Boston, MA, 02196, USA
+*/
+
+/*                                                      WINDIN.H        */
+
+#pragma once
+#include "cwindow.h"
+typedef struct
+    {
+    OPDS h;
+    MYFLT   *kxrslt, *kyrslt;
+    MYFLT   *iprd, *ixmin, *ixmax, *iymin, *iymax, *ixinit, *iyinit;
+    int32_t     countdown, timcount;
+    struct xyindat_ w;          /* window specific data structure */
+    } XYIN;
+

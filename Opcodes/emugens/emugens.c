@@ -1,0 +1,3206 @@
+/*
+
+    emugens.c:
+
+    Copyright (C) 2017  Eduardo Moguillansky
+
+    This file is part of Csound.
+
+    The Csound Library is free software; you can redistribute it
+    and/or modify it under the terms of the GNU Lesser General Public
+    License as published by the Free Software Foundation; either
+    version 2.1 of the License, or (at your option) any later version.
+
+    Csound is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public
+    License along with Csound; if not, write to the Free Software
+    Foundation, Inc., 31 Milk Street, #960789, Boston, MA, 02196, USA
+*/
+
+#include "emugens_common.h"
+#include "interlocks.h"
+#include "arrays.h"
+#ifndef __BUILDING_LIBCSOUND
+/* udo.h only needs this private type as an opaque pointer in plugin builds. */
+typedef struct opcodinfo OPCODINFO;
+#endif
+#include "udo.h"
+#include <ctype.h>
+
+#define SAMPLE_ACCURATE \
+    uint32_t n, nsmps = CS_KSMPS;                                    \
+    MYFLT *out = p->out;                                             \
+    uint32_t offset = p->h.insdshead->ksmps_offset;                  \
+    uint32_t early = p->h.insdshead->ksmps_no_end;                   \
+    if (UNLIKELY(offset)) memset(out, '\0', offset*sizeof(MYFLT));   \
+    if (UNLIKELY(early)) {                                           \
+        nsmps -= early;                                              \
+        memset(&out[nsmps], '\0', early*sizeof(MYFLT));              \
+    }                                                                \
+
+// needed for each opcode using audio-rate inputs/outputs
+#define AUDIO_OPCODE(csound, p) \
+    IGN(csound); \
+    uint32_t n, nsmps = CS_KSMPS;                                    \
+    uint32_t offset = p->h.insdshead->ksmps_offset;                  \
+    uint32_t early = p->h.insdshead->ksmps_no_end;                   \
+
+// initialize an audio output variable, for sample-accurate offset/early end
+// this should be called for each audio output
+#define AUDIO_OUTPUT(out) \
+    if (UNLIKELY(offset)) memset(out, '\0', offset*sizeof(MYFLT));   \
+    if (UNLIKELY(early)) {                                           \
+        nsmps -= early;                                              \
+        memset(&out[nsmps], '\0', early*sizeof(MYFLT));              \
+    }                                                                \
+
+
+#define UI32MAX 0x7FFFFFFF
+
+
+/*
+
+   linlin
+
+   linear to linear conversion
+
+   ky   linlin kx, kylow, kyhigh, kxlow=0, kxhigh=1
+
+   ky = (kx - kxlow) / (kxhigh - kxlow) * (kyhigh - kylow) + kylow
+
+   linlin(0.25, 1, 3, 0, 1)   -> 1.5
+   linlin(0.25, 1, 3)         -> 1.5
+   linlin(0.25, 1, 3, 0, 0.5) -> 2
+
+   Variants:
+
+   ky[] linlin kx[], kylow, kyhigh, kxlow=0, kxhigh=1
+   ky[] linlin kx, kylow[], kyhigh[], kxlow=0, kxhigh=1
+
+ */
+
+typedef struct {
+    OPDS h;
+    MYFLT *kout, *kx, *ky0, *ky1, *kx0, *kx1;
+} LINLIN1;
+
+static int32_t
+linlin1_perf(CSOUND *csound, LINLIN1 *p) {
+    MYFLT x0 = *p->kx0;
+    MYFLT y0 = *p->ky0;
+    MYFLT x = *p->kx;
+    MYFLT x1 = *p->kx1;
+    if (UNLIKELY(x0 == x1)) {
+        return csound->PerfError(csound, &(p->h),
+                                 "%s", Str("linlin.k: Division by zero"));
+    }
+    *p->kout = (x - x0) / (x1 -x0) * (*(p->ky1) - y0) + y0;
+    return OK;
+}
+
+typedef struct {
+    OPDS h;
+    // kY[] linlin kX[], ky0, ky1, kx0=0, kx1=1
+    ARRAYDAT *ys, *xs;
+    MYFLT *ky0, *ky1, *kx0, *kx1;
+} LINLINARR1;
+
+
+static int32_t linlinarr1_init(CSOUND *csound, LINLINARR1 *p) {
+    if (UNLIKELY(p->xs->dimensions != 1 || p->xs->sizes == NULL ||
+                   p->ys->dimensions > 1))
+        return INITERR(Str("linlin: expected one-dimensional arrays"));
+    int32_t numitems = p->xs->sizes[0];
+    if (UNLIKELY(tabinit(csound, p->ys, numitems,
+                         p->h.insdshead) != OK))
+      return csound_array_init_resize_error(csound);
+    return OK;
+}
+
+
+static int32_t
+linlinarr1_common(CSOUND *csound, LINLINARR1 *p, int32_t init) {
+    if (UNLIKELY(p->xs->dimensions != 1 || p->xs->sizes == NULL ||
+                   p->ys->dimensions != 1))
+        return INITPERFERR(init, Str("linlin: expected one-dimensional arrays"));
+    const MYFLT x0 = *p->kx0;
+    const MYFLT y0 = *p->ky0;
+    const MYFLT x1 = *p->kx1;
+    const MYFLT y1 = *p->ky1;
+
+    if (UNLIKELY(x0 == x1)) {
+        return INITPERFERR(init, Str("linlin: Division by zero"));
+    }
+    MYFLT fact = 1/(x1 - x0) * (y1 - y0);
+
+    int32_t numitems = p->xs->sizes[0];
+    if (!init && UNLIKELY(tabcheck(csound, p->ys, numitems, &p->h) != OK))
+        return NOTOK;
+    /* Input and output may be the same array. */
+    MYFLT *out = p->ys->data;
+    const MYFLT *in = p->xs->data;
+    int32_t i;
+    for(i=0; i<numitems; i++) {
+        out[i] = (in[i] - x0) * fact + y0;
+    }
+    return OK;
+}
+
+
+static int32_t
+linlinarr1_perf(CSOUND *csound, LINLINARR1 *p) {
+    return linlinarr1_common(csound, p, 0);
+}
+
+static int32_t
+linlinarr1_i(CSOUND *csound, LINLINARR1 *p) {
+    if (UNLIKELY(linlinarr1_init(csound, p) != OK))
+        return NOTOK;
+    return linlinarr1_common(csound, p, 1);
+}
+
+typedef struct {
+    OPDS h;
+    // kOut[] linlin kx, kA[], kB[], kx0=0, kx1=1
+    ARRAYDAT *out;
+    MYFLT *kx;
+    ARRAYDAT *A, *B;
+    MYFLT *kx0, *kx1;
+} BLENDARRAY;
+
+static int32_t
+blendarray_init(CSOUND *csound, BLENDARRAY *p) {
+    if (UNLIKELY(p->A->dimensions != 1 || p->A->sizes == NULL ||
+                   p->B->dimensions != 1 || p->B->sizes == NULL ||
+                   p->out->dimensions > 1))
+        return INITERR(Str("linlin: expected one-dimensional arrays"));
+    int32_t numitemsA = p->A->sizes[0];
+    int32_t numitemsB = p->B->sizes[0];
+    int32_t numitems = numitemsA < numitemsB ? numitemsA : numitemsB;
+    if (UNLIKELY(tabinit(csound, p->out, numitems,
+                         p->h.insdshead) != OK))
+      return csound_array_init_resize_error(csound);
+    return OK;
+}
+
+static int32_t
+blendarray_common(CSOUND *csound, BLENDARRAY *p, int32_t init)
+{
+    if (UNLIKELY(p->A->dimensions != 1 || p->A->sizes == NULL ||
+                   p->B->dimensions != 1 || p->B->sizes == NULL ||
+                   p->out->dimensions != 1))
+        return INITPERFERR(init, Str("linlin: expected one-dimensional arrays"));
+    MYFLT x0 = *p->kx0;
+    MYFLT x1 = *p->kx1;
+    MYFLT x = *p->kx;
+
+    if (UNLIKELY(x0 == x1)) {
+        return INITPERFERR(init, Str("linlin: Division by zero"));
+    }
+    int32_t numitemsA = p->A->sizes[0];
+    int32_t numitemsB = p->B->sizes[0];
+    int32_t numitems = numitemsA < numitemsB ? numitemsA : numitemsB;
+    if (!init && UNLIKELY(tabcheck(csound, p->out, numitems, &p->h) != OK))
+        return NOTOK;
+
+    MYFLT *out = p->out->data;
+    MYFLT *A = p->A->data;
+    MYFLT *B = p->B->data;
+    MYFLT y0, y1;
+    MYFLT fact = (x - x0) / (x1 - x0);
+    int32_t i;
+    for(i=0; i<numitems; i++) {
+        y0 = A[i];
+        y1 = B[i];
+        out[i] = (y1 - y0) * fact + y0;
+    }
+    return OK;
+}
+
+static int32_t
+blendarray_perf(CSOUND *csound, BLENDARRAY *p) {
+    return blendarray_common(csound, p, 0);
+}
+
+static int32_t
+blendarray_i(CSOUND *csound, BLENDARRAY *p) {
+    if (UNLIKELY(blendarray_init(csound, p) != OK))
+        return NOTOK;
+    return blendarray_common(csound, p, 1);
+}
+
+
+/*
+
+    linear to cosine interpolation
+    ky lincos kx, ky0, ky1, kx0=0, kx1=1
+
+    given x between x0 and x1, find y between y0 and y1 with cosine interpolation
+
+    The order of ky0 and ky1 are given first because it is often used in contexts
+    where kx is defined between 0 and 1
+
+*/
+
+static int32_t
+lincos_perf(CSOUND *csound, LINLIN1 *p) {
+    MYFLT x0 = *p->kx0;
+    MYFLT y0 = *p->ky0;
+    MYFLT x = *p->kx;
+    MYFLT x1 = *p->kx1;
+    MYFLT y1 = *p->ky1;
+    if (UNLIKELY(x0 == x1)) {
+        return PERFERR(Str("lincos: Division by zero"));
+    }
+    // PI is defined in csoundCore.h, use that instead of M_PI from math.h, which
+    // is not defined in windows
+    MYFLT dx = ((x-x0) / (x1-x0)) * PI + PI;           // dx range pi - 2pi
+    *p->kout = y0 + ((y1 - y0) * (1 + COS(dx)) / 2.0);
+    return OK;
+}
+
+/* ------------- xyscale --------------
+
+   2d linear interpolation (normalized)
+
+   Given values for four points at (0, 0), (1, 0), (0, 1), (1, 1),
+   calculate the interpolated value at a given coord (x, y) inside this square
+
+   inputs: kx, ky, v00, v10, v01, v11
+
+   kx, ky: coord, between 0-1
+
+   This is conceptually the same as:
+
+   ky0 = scale(kx, v10, v00)
+   ky1 = scale(kx, v11, v01)
+   kout = scale(ky, ky1, ky0)
+
+ */
+
+typedef struct {
+    OPDS h;
+    MYFLT *kout, *kx, *ky, *v00, *v10, *v01, *v11;
+    MYFLT d0, d1;
+} XYSCALE;
+
+static int32_t xyscalei_init(CSOUND *csound, XYSCALE *p) {
+    IGN(csound);
+    p->d0 = (*p->v10) - (*p->v00);
+    p->d1 = (*p->v11) - (*p->v01);
+    return OK;
+}
+
+static int32_t xyscalei(CSOUND *csound, XYSCALE *p) {
+    IGN(csound);
+    // x, y: between 0-1
+    MYFLT x = *p->kx;
+    MYFLT y0 = x * (p->d0) + (*p->v00);
+    MYFLT y1 = x * (p->d1) + (*p->v01);
+    *p->kout = (*p->ky) * (y1 - y0) + y0;
+    return OK;
+}
+
+static int32_t xyscale(CSOUND *csound, XYSCALE *p) {
+    IGN(csound);
+    // x, y: between 0-1
+    // x, y will interpolate between the values at the 4 corners
+    MYFLT v00 = *p->v00;
+    MYFLT v01 = *p->v01;
+    MYFLT x = *p->kx;
+    MYFLT y0 = x * (*p->v10 - v00) + v00;
+    MYFLT y1 = x * (*p->v11 - v01) + v01;
+    *p->kout = (*p->ky) * (y1 - y0) + y0;
+    return OK;
+}
+
+
+/*  mtof -- ftom
+
+   midi to frequency conversion
+
+   mtof(midinote)
+
+   kfreq = mtof(69)
+
+ */
+
+typedef struct {
+  OPDS h;
+  MYFLT *r, *k, *irnd;
+  MYFLT freqA4;
+  int32_t rnd;
+} PITCHCONV;
+
+static inline MYFLT
+mtof_func(MYFLT midi, MYFLT a4) {
+    return POWER(FL(2.0), (midi - FL(69.0)) / FL(12.0)) * a4;
+}
+
+static int32_t mtof(CSOUND *csound, PITCHCONV *p) {
+    IGN(csound);
+    *p->r = mtof_func(*p->k, p->freqA4);
+    return OK;
+}
+
+static int32_t
+mtof_init(CSOUND *csound, PITCHCONV *p) {
+    p->freqA4 = csound->GetA4(csound);
+    mtof(csound, p);
+    return OK;
+}
+
+static int32_t ftom(CSOUND *csound, PITCHCONV *p) {
+    MYFLT ans;
+    IGN(csound);
+    ans = FL(12.0) * LOG2(*p->k / p->freqA4) + FL(69.0);
+    if (UNLIKELY(p->rnd)) ans = (MYFLT)MYFLT2LRND(ans);
+    *p->r = ans;
+    return OK;
+}
+
+static int32_t
+ftom_init(CSOUND *csound, PITCHCONV *p) {
+    p->freqA4 = csound->GetA4(csound);
+    p->rnd = (int)(*p->irnd);
+    ftom(csound, p);
+    return OK;
+}
+
+static int32_t pchtom(CSOUND *csound, PITCHCONV *p) {
+    IGN(csound);
+    MYFLT pch = *p->k;
+    MYFLT oct = FLOOR(pch);
+    MYFLT note = pch - oct;
+    *p->r = (oct - FL(3.0)) * FL(12.0) + note * FL(100.0);
+    return OK;
+}
+
+
+typedef struct {
+    OPDS h;
+    ARRAYDAT *outarr, *inarr;
+    MYFLT *irnd;
+    MYFLT freqA4;
+    int32_t rnd;
+} PITCHCONV_ARR;
+
+
+static int32_t
+ftom_arr(CSOUND *csound, PITCHCONV_ARR *p) {
+    MYFLT x, *indata, *outdata;
+    int32_t i;
+    MYFLT a4 = p->freqA4;
+    int32_t numitems = p->inarr->sizes[0];
+    if (UNLIKELY(ARRAY_ENSURESIZE_PERF(csound, p->outarr, numitems) != OK))
+        return NOTOK;
+    indata = p->inarr->data;
+    outdata = p->outarr->data;
+    for(i=0; i < numitems; i++) {
+        x = indata[i];
+        outdata[i] = FL(12.0) * LOG2(x / a4) + FL(69.0);
+    }
+    if(UNLIKELY(p->rnd)) {
+        for(i=0; i < numitems; i++) {
+            outdata[i] = (MYFLT)MYFLT2LRND(outdata[i]);
+        }
+    }
+    return OK;
+}
+
+static int32_t
+ftom_arr_init(CSOUND *csound, PITCHCONV_ARR *p) {
+    p->freqA4 = csound->GetA4(csound);
+    p->rnd = (int)*p->irnd;
+    if (UNLIKELY(tabinit(csound, p->outarr, p->inarr->sizes[0],
+                         p->h.insdshead) != OK))
+      return csound_array_init_resize_error(csound);
+    return ftom_arr(csound, p);
+}
+
+static int32_t
+mtof_arr(CSOUND *csound, PITCHCONV_ARR *p) {
+    MYFLT x, *indata, *outdata;
+    int32_t i;
+    MYFLT a4 = p->freqA4;
+    int32_t numitems = p->inarr->sizes[0];
+    if (UNLIKELY(ARRAY_ENSURESIZE_PERF(csound, p->outarr, numitems) != OK))
+        return NOTOK;
+    indata = p->inarr->data;
+    outdata = p->outarr->data;
+    for(i=0; i < numitems; i++) {
+        x = indata[i];
+        outdata[i] = POWER(FL(2.0), (x - FL(69.0)) / FL(12.0)) * a4;
+    }
+    return OK;
+}
+
+static int32_t
+mtof_arr_init(CSOUND *csound, PITCHCONV_ARR *p) {
+    p->freqA4 = csound->GetA4(csound);
+    if (UNLIKELY(tabinit(csound, p->outarr, p->inarr->sizes[0],
+                         p->h.insdshead) != OK))
+      return csound_array_init_resize_error(csound);
+    return mtof_arr(csound, p);
+}
+
+/*
+   bpf  --> break point function with linear interpolation
+
+   ky bpf kx, kx0, ky0, kx1, ky1, ...
+   iy bpf ix, ix0, iy0, ix1, iy1, ...
+   kys[] bpf kxs[], kx0, ky0, kx1, ky1, ...
+   ky bpf kx, kxs[], kys[]
+   ky bpf kx, kpairs[]  ??
+   ay bpf ax, kx0, ky0, kx1, ky1, ...
+   ay bpf ax, kxs[], kys[]
+
+
+
+
+ */
+
+// VL Clang complains this is unused, commenting out.
+/*
+static inline int32_t bpf_find_multidim(MYFLT x, MYFLT *xs, int32_t xslen, int32_t step, int32_t lastidx) {
+    // xslen: size of xs (number of frames, not size of array)
+    // step: normally 1, can be more for the case where xs and ys (and possibly zs, etc)
+    // are all embedded in the same array: [x0, y0, z0, x1, y1, z1, ...]
+    // returns: index or -1: lower bound, -2: upper bound
+    if(lastidx < xslen - 1 && xs[lastidx*step] <= x && x < xs[(lastidx+1)*step]) {
+        return lastidx;
+    }
+    // check next idx
+    if(lastidx < xslen - 2 && xs[(lastidx+1)*step] <= x && x < xs[(lastidx+2)*step]) {
+        return lastidx+1;
+    }
+    // Generic search. first check bounds
+    if(x <= xs[0]) {
+        return -1;
+    }
+    if(x >= xs[(xslen-1)*step]) {
+        return -2;
+    }
+    // bin search
+    int32_t imin = 0;
+    int32_t imax = xslen;
+    int32_t imid;
+    while (imin < imax) {
+        imid = (imax + imin) / 2;
+        if (xs[imid*step] < x)
+            imin = imid + 1;
+        else
+            imax = imid;
+    }
+    return imin;
+}
+*/
+
+#define BPF_MAXPOINTS 256
+
+typedef struct {
+    OPDS h;
+    MYFLT *r, *x, *data[BPF_MAXPOINTS];
+    int32_t lastidx;
+} BPFX;
+
+
+static int32_t bpfx_init(CSOUND *csound, BPFX *p) {
+    int32_t datalen = p->INOCOUNT - 1;
+    p->lastidx = -1;
+    if(datalen % 2) {
+      return INITERR(Str("bpf: data length should be even (pairs of x, y)"));
+    }
+    if(datalen >= BPF_MAXPOINTS) {
+      return INITERR(Str("bpf: too many pargs (max=256)"));
+    }
+    return OK;
+}
+
+
+static int32_t bpfx_k(CSOUND *csound, BPFX *p);
+
+
+static int32 bpfx_i(CSOUND *csound, BPFX *p) {
+    if (bpfx_init(csound, p) != OK)
+        return NOTOK;
+    return bpfx_k(csound, p);
+}
+
+
+/*
+   Returns: -1 if x is less than or equal to the lowest breakpoint
+            -2 if x is greater than or equal to the highest breakpoint
+            otherwise, returns the index of the lower breakpoint. NB: because the x and
+            y data are interleaved, the index returned is the index of the x value, which is always even.
+*/
+
+static inline int32_t bpfx_find(MYFLT **data, MYFLT x, int32_t datalen, int32_t lastidx) {
+    // returns -1 if x is less than the lowest breakpoint
+    if (x <= *data[0])
+        return -1;
+    // -2 if x is higher than the highest breakpoint
+    if (x>=*data[datalen-2])
+        return -2;
+    if(lastidx >= 0) {
+        if(lastidx < datalen - 2 && *data[lastidx] <= x && x < *data[lastidx+2])
+            return lastidx;
+        // search next pair
+        if(lastidx < datalen - 4 && *data[lastidx+2] <= x && x < *data[lastidx+4])
+            return lastidx+2;
+    }
+    // binary search
+    int32_t numpairs = datalen / 2;
+    int32_t pairmin = 0;
+    int32_t pairmax = numpairs;
+    int32_t pairmid;
+
+    while (pairmin < pairmax) {
+        pairmid = (pairmax + pairmin) / 2;
+        if (*data[pairmid * 2] <= x)
+            pairmin = pairmid + 1;
+        else
+            pairmax = pairmid;
+    }
+    // Select the segment starting at an exact interior breakpoint.
+    return (pairmin-1)*2;
+}
+
+static int32_t bpfx_k(CSOUND *csound, BPFX *p) {
+    MYFLT x = *p->x;
+    MYFLT **data = p->data;
+    int32_t datalen = p->INOCOUNT - 1;
+    MYFLT x0, x1, y0, y1;
+
+    int32_t idx = bpfx_find(data, x, datalen, p->lastidx);
+    
+    if(idx == -1) {
+        *p->r = *data[1];
+        p->lastidx = -1;
+        return OK;
+    }
+
+    if(idx == -2) {
+        *p->r = *data[datalen-1];
+        p->lastidx = -1;
+        return OK;
+    }
+
+    x0 = *data[idx];
+    x1 = *data[idx+2];
+    if(UNLIKELY(x < x0 || x > x1)) {
+        printf("Bug in bpfx_k. x: %f should be between %f and %f\n", x, x0, x1);
+        return NOTOK;
+    }
+
+    y0 = *data[idx+1];
+    y1 = *data[idx+3];
+    *p->r = (x-x0)/(x1-x0)*(y1-y0)+y0;
+    p->lastidx = idx;
+    return OK;
+}
+
+static int32_t bpfxcos_k(CSOUND *csound, BPFX *p) {
+    MYFLT x = *p->x;
+    MYFLT **data = p->data;
+    int32_t datalen = p->INOCOUNT - 1;
+    MYFLT x0, x1, y0, y1, dx;
+
+    int32_t idx = bpfx_find(data, x, datalen, p->lastidx);
+
+    if(idx == -1) {
+        *p->r = *data[1];
+        p->lastidx = -1;
+        return OK;
+    }
+
+    if(idx == -2) {
+        *p->r = *data[datalen-1];
+        p->lastidx = -1;
+        return OK;
+    }
+
+    x0 = *data[idx];
+    x1 = *data[idx+2];
+    if(UNLIKELY(x0 > x || x >= x1))
+        return NOTOK;
+    y0 = *data[idx+1];
+    y1 = *data[idx+3];
+    dx = ((x-x0) / (x1-x0)) * PI + PI;
+    *p->r = y0 + ((y1 - y0) * (1 + COS(dx)) / 2.0);
+    p->lastidx = idx;
+    return OK;
+}
+
+static int32 bpfxcos_i(CSOUND *csound, BPFX *p) {
+    if (bpfx_init(csound, p) != OK)
+        return NOTOK;
+    return bpfxcos_k(csound, p);
+}
+
+/*
+ * ky bpf kx, kxs[], kys[]
+ */
+
+typedef struct {
+    OPDS h;
+    MYFLT *y, *x;
+    ARRAYDAT *xs, *ys;
+    int64_t lastidx;
+} BPF_k_kKK;
+
+
+
+static inline int64_t bpfarr_find(MYFLT x, MYFLT *xs, int64_t xslen, int64_t lastidx) {
+    // -1: lower bound, -2: upper bound
+    if(x <= xs[0]) {
+        return -1;
+    }
+    if(x >= xs[xslen-1]) {
+        return -2;
+    }
+    if(lastidx >= 0 && lastidx < xslen-1 && xs[lastidx] <= x && x < xs[lastidx+1]) {
+        return lastidx;
+    }
+
+    int64_t imin = 0;
+    int64_t imax = xslen;
+    int64_t imid;
+
+    while (imin < imax) {
+        imid = (imax + imin) / 2;
+        if (xs[imid] <= x)
+            imin = imid + 1;
+        else
+            imax = imid;
+    }
+    // Select the segment starting at an exact interior breakpoint.
+    return imin - 1;
+}
+
+
+/* Point arrays must remain nonempty when their values change at k-rate. */
+#define BPF_POINTS_VALID(a) ((a)->dimensions == 1 && (a)->sizes != NULL && \
+                             (a)->sizes[0] > 0 && (a)->data != NULL)
+
+static int32_t bpf_k_kKK_init(CSOUND *csound, BPF_k_kKK *p) {
+    if (UNLIKELY(!BPF_POINTS_VALID(p->xs) || !BPF_POINTS_VALID(p->ys)))
+        return INITERR(Str("bpf: expected nonempty one-dimensional point arrays"));
+    p->lastidx = -1;
+    return OK;
+}
+
+static int32_t bpf_k_kKK_kr(CSOUND *csound, BPF_k_kKK *p) {
+    if (UNLIKELY(!BPF_POINTS_VALID(p->xs) || !BPF_POINTS_VALID(p->ys)))
+        return PERFERR(Str("bpf: expected nonempty one-dimensional point arrays"));
+    int64_t numxs = p->xs->sizes[0];
+    int64_t numys = p->ys->sizes[0];
+    int64_t N = numxs < numys ? numxs : numys;
+    MYFLT *xs = p->xs->data;
+    MYFLT *ys = p->ys->data;
+    MYFLT x = *p->x;
+    MYFLT x0, y0, x1, y1;
+
+    int64_t idx = bpfarr_find(x, xs, N, p->lastidx);
+
+    if(idx == -1) {
+        *p->y = ys[0];
+        p->lastidx = -1;
+        return OK;
+    }
+
+    if(idx == -2) {
+        *p->y = ys[N-1];
+        p->lastidx = -1;
+        return OK;
+    }
+
+    x0 = xs[idx];
+    x1 = xs[idx+1];
+    y0 = ys[idx];
+    y1 = ys[idx+1];
+    *p->y = (x-x0)/(x1-x0)*(y1-y0)+y0;
+    p->lastidx = idx;
+    return OK;
+
+}
+
+
+static int32_t bpf_k_kKK_ir(CSOUND *csound, BPF_k_kKK *p) {
+    if (bpf_k_kKK_init(csound, p) != OK)
+        return NOTOK;
+    return bpf_k_kKK_kr(csound, p);
+}
+
+
+static int32_t bpfcos_k_kKK_kr(CSOUND *csound, BPF_k_kKK *p) {
+    if (UNLIKELY(!BPF_POINTS_VALID(p->xs) || !BPF_POINTS_VALID(p->ys)))
+        return PERFERR(Str("bpf: expected nonempty one-dimensional point arrays"));
+    int32_t numxs = p->xs->sizes[0];
+    int32_t numys = p->ys->sizes[0];
+    int32_t N = numxs < numys ? numxs : numys;
+    MYFLT *xs = p->xs->data;
+    MYFLT *ys = p->ys->data;
+    MYFLT x = *p->x;
+    int32_t i = (int32_t) bpfarr_find(x, xs, N, p->lastidx);
+    MYFLT x0, y0, x1, y1, dx;
+    if(i == -1) {
+        *p->y = ys[0];
+        p->lastidx = -1;
+        return OK;
+    }
+    if(i == -2) {
+        *p->y = ys[N-1];
+        p->lastidx = -1;
+        return OK;
+    }
+    x0 = xs[i];
+    x1 = xs[i+1];
+    y0 = ys[i];
+    y1 = ys[i+1];
+    dx = ((x-x0) / (x1-x0)) * PI + PI;
+    *p->y = y0 + ((y1 - y0) * (1 + COS(dx)) / 2.0);
+    p->lastidx = i;
+    return OK;
+}
+
+static int32_t bpfcos_k_kKK_ir(CSOUND *csound, BPF_k_kKK *p) {
+    if (bpf_k_kKK_init(csound, p) != OK)
+        return NOTOK;
+    return bpfcos_k_kKK_kr(csound, p);
+}
+
+
+// ay bpf ax, kxs[], kys[]
+
+static int32_t bpf_a_aKK_kr(CSOUND *csound, BPF_k_kKK *p) {
+    if (UNLIKELY(!BPF_POINTS_VALID(p->xs) || !BPF_POINTS_VALID(p->ys)))
+        return PERFERR(Str("bpf: expected nonempty one-dimensional point arrays"));
+    int64_t numxs = p->xs->sizes[0];
+    int64_t numys = p->ys->sizes[0];
+    int64_t N = numxs < numys ? numxs : numys;
+    int64_t i;
+    MYFLT *xs = p->xs->data;
+    MYFLT *ys = p->ys->data;
+    MYFLT x0, y0, x1, y1, x;
+
+    MYFLT *out = p->y;
+    MYFLT *in = p->x;
+
+    int64_t lastidx = p->lastidx;
+
+    AUDIO_OPCODE(csound, p);
+    AUDIO_OUTPUT(out);
+
+    MYFLT firsty = ys[0];
+    MYFLT lasty = ys[N-1];
+
+    for(n=offset; n<nsmps; n++) {
+        x = in[n];
+        i = (int32_t) bpfarr_find(x, xs, N, lastidx);
+        if(i == -1) {
+            out[n] = firsty;
+            lastidx = -1;
+        } else if (i == -2) {
+            out[n] = lasty;
+            lastidx = -1;
+        } else {
+            x0 = xs[i];
+            x1 = xs[i+1];
+            if(UNLIKELY(x0 > x || x >= x1))
+                return NOTOK;
+            y0 = ys[i];
+            y1 = ys[i+1];
+            out[n] = (x-x0)/(x1-x0)*(y1-y0)+y0;
+            lastidx = i;
+        }
+    }
+    p->lastidx = lastidx;
+    return OK;
+}
+
+static int32_t bpfcos_a_aKK_kr(CSOUND *csound, BPF_k_kKK *p) {
+    if (UNLIKELY(!BPF_POINTS_VALID(p->xs) || !BPF_POINTS_VALID(p->ys)))
+        return PERFERR(Str("bpf: expected nonempty one-dimensional point arrays"));
+    int64_t numxs = p->xs->sizes[0];
+    int64_t numys = p->ys->sizes[0];
+    int64_t N = numxs < numys ? numxs : numys;
+    int64_t i;
+    MYFLT *xs = p->xs->data;
+    MYFLT *ys = p->ys->data;
+    MYFLT x0, y0, x1, y1, x, dx;
+
+    MYFLT *out = p->y;
+    MYFLT *in = p->x;
+
+    int64_t lastidx = p->lastidx;
+
+    AUDIO_OPCODE(csound, p);
+    AUDIO_OUTPUT(out);
+
+    MYFLT firsty = ys[0];
+    MYFLT lasty = ys[N-1];
+
+    for(n=offset; n<nsmps; n++) {
+        x = in[n];
+        i = (int32_t) bpfarr_find(x, xs, N, lastidx);
+        if(i == -1) {
+            out[n] = firsty;
+            lastidx = -1;
+        } else if (i == -2) {
+            out[n] = lasty;
+            lastidx = -1;
+        } else {
+            x0 = xs[i];
+            x1 = xs[i+1];
+            if(UNLIKELY(x0 > x || x >= x1))
+                return NOTOK;
+            y0 = ys[i];
+            y1 = ys[i+1];
+            dx = ((x-x0) / (x1-x0)) * PI + PI;
+            out[n] = y0 + ((y1 - y0) * (1 + COS(dx)) / 2.0);
+            lastidx = i;
+        }
+    }
+    p->lastidx = lastidx;
+    return OK;
+}
+// ky, kz bpf kx, kxs[], kys[], kzs[]
+typedef struct {
+    OPDS h;
+    MYFLT *y, *z, *x;
+    ARRAYDAT *xs, *ys, *zs;
+    int64_t lastidx;
+} BPF_kk_kKKK;
+
+static int32_t bpf_kk_kKKK_init(CSOUND *csound, BPF_kk_kKKK *p) {
+    if (UNLIKELY(!BPF_POINTS_VALID(p->xs) || !BPF_POINTS_VALID(p->ys) ||
+                 !BPF_POINTS_VALID(p->zs)))
+        return INITERR(Str("bpf: expected nonempty one-dimensional point arrays"));
+    p->lastidx = -1;
+    return OK;
+}
+
+static int32_t bpf_kk_kKKK_kr(CSOUND *csound, BPF_kk_kKKK *p) {
+    if (UNLIKELY(!BPF_POINTS_VALID(p->xs) || !BPF_POINTS_VALID(p->ys) ||
+                 !BPF_POINTS_VALID(p->zs)))
+        return PERFERR(Str("bpf: expected nonempty one-dimensional point arrays"));
+    int32_t numxs = p->xs->sizes[0];
+    int32_t numys = p->ys->sizes[0];
+    int32_t numzs = p->zs->sizes[0];
+    int32_t N = numxs < numys ? numxs : numys;
+    N = N < numzs ? N : numzs;
+
+    MYFLT *xs = p->xs->data;
+    MYFLT *ys = p->ys->data;
+    MYFLT *zs = p->zs->data;
+    MYFLT x = *p->x;
+    int32_t i = (int32_t) bpfarr_find(x, xs, N, p->lastidx);
+
+    if(i == -1) {
+        *p->y = ys[0];
+        *p->z = zs[0];
+        return OK;
+    }
+    if(i == -2) {
+        *p->y = ys[N-1];
+        *p->z = zs[N-1];
+        return OK;
+    }
+
+    MYFLT x0 = xs[i];
+    MYFLT x1 = xs[i+1];
+    MYFLT y0 = ys[i];
+    MYFLT z0 = zs[i];
+
+    MYFLT dx = (x-x0)/(x1-x0);
+    *p->y = dx*(ys[i+1]-y0)+y0;
+    *p->z = dx*(zs[i+1]-z0)+z0;
+    p->lastidx = i;
+    return OK;
+}
+
+static int32_t bpf_kk_kKKK_ir(CSOUND *csound, BPF_kk_kKKK *p) {
+    if (bpf_kk_kKKK_init(csound, p) != OK)
+        return NOTOK;
+    return bpf_kk_kKKK_kr(csound, p);
+}
+
+
+#undef BPF_POINTS_VALID
+
+// kys[] bpf kxs[], kx0, ky0, kx1, ky1, ...
+typedef struct {
+    OPDS h;
+    ARRAYDAT *out, *in;
+    MYFLT *data[BPF_MAXPOINTS];
+    int32_t lastidx;
+} BPF_K_Km;
+
+
+static int32_t bpf_K_Km_init(CSOUND *csound, BPF_K_Km *p) {
+    if (UNLIKELY(p->in->dimensions != 1 || p->in->sizes == NULL ||
+                   p->out->dimensions > 1))
+        return INITERR(Str("bpf: expected one-dimensional arrays"));
+    int32_t datalen = p->INOCOUNT - 1;
+    if(datalen % 2)
+        return INITERR(Str("bpf: data length should be even (pairs of x, y)"));
+    if(datalen < 4)
+        return INITERRF(Str("At least two pairs are needed, got %d"), datalen/2);
+    if(datalen >= BPF_MAXPOINTS)
+        return INITERR(Str("bpf: too many pargs (max=256)"));
+    int32_t N = p->in->sizes[0];
+    if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+      return csound_array_init_resize_error(csound);
+    p->lastidx = -1;
+    return OK;
+}
+
+static int32_t bpf_K_Km_kr(CSOUND *csound, BPF_K_Km *p) {
+    if (UNLIKELY(p->in->dimensions != 1 || p->in->sizes == NULL ||
+                   p->out->dimensions != 1))
+        return PERFERR(Str("bpf: expected one-dimensional arrays"));
+    int32_t N = p->in->sizes[0];
+    if (UNLIKELY(tabcheck(csound, p->out, N, &p->h) != OK))
+        return NOTOK;
+
+    MYFLT **data = p->data;
+    MYFLT *out = p->out->data;
+    MYFLT *in  = p->in->data;
+
+    int32_t datalen = p->INOCOUNT - 1;
+    int32_t idx, i;
+    MYFLT x, x0, x1, y0, y1, firsty, lasty;
+    firsty = *data[1];
+    lasty = *data[datalen-1];
+    int32_t lastidx = p->lastidx;
+
+    for(idx=0; idx<N; idx++) {
+        x = in[idx];
+        i = (int32_t) bpfx_find(data, x, datalen, lastidx);
+
+        if(i == -1) {
+            out[idx] = firsty;
+            lastidx = -1;
+        } else if (i == -2) {
+            out[idx] = lasty;
+            lastidx = -1;
+        } else {
+            x0 = *data[i];
+            x1 = *data[i+2];
+            if(UNLIKELY(x0 > x || x >= x1))
+                return NOTOK;
+            y0 = *data[i+1];
+            y1 = *data[i+3];
+            out[idx] = (x-x0)/(x1-x0)*(y1-y0)+y0;
+            lastidx = i;
+        }
+    }
+    p->lastidx = lastidx;
+    return OK;
+}
+
+
+typedef struct {
+    OPDS h;
+    MYFLT *out, *in;
+    MYFLT *data[BPF_MAXPOINTS];
+    int64_t lastidx;
+} BPF_a_am;
+
+
+static int32_t bpf_a_am_init(CSOUND *csound, BPF_a_am *p) {
+    uint32_t datalen = p->INOCOUNT - 1;
+    if(datalen % 2)
+        return INITERRF(Str("bpf: data length should be even (pairs of x, y), got %d"), datalen);
+    if(datalen < 4)
+        return INITERRF(Str("At least two pairs are needed, got %d"), datalen%2);
+    if(datalen >= BPF_MAXPOINTS)
+        return INITERRF(Str("bpf: too many pargs (max=%d)"), BPF_MAXPOINTS);
+    p->lastidx = -1;
+    return OK;
+}
+
+
+static int32_t bpf_a_am_kr(CSOUND *csound, BPF_a_am *p) {
+    MYFLT *out = p->out;
+    MYFLT *in = p->in;
+    uint32_t datalen = p->INOCOUNT - 1;
+    int64_t lastidx = p->lastidx;
+
+    AUDIO_OPCODE(csound, p);
+    AUDIO_OUTPUT(out);
+
+    MYFLT **data = p->data;
+
+    int32_t i;
+
+    MYFLT x, x0, x1, y0, y1, firsty, lasty;
+    firsty = *data[1];
+    lasty = *data[datalen-1];
+
+    for(n=offset; n<nsmps; n++) {
+        x = in[n];
+        i = (int32_t) bpfx_find(data, x, datalen, (int32_t) lastidx);
+        if(i == -1) {
+            out[n] = firsty;
+            lastidx = -1;
+        } else if (i == -2) {
+            out[n] = lasty;
+            lastidx = -1;
+        } else {
+            x0 = *data[i];
+            x1 = *data[i+2];
+            if(UNLIKELY(x0 > x || x >= x1))
+                return NOTOK;
+            y0 = *data[i+1];
+            y1 = *data[i+3];
+            out[n] = (x-x0)/(x1-x0)*(y1-y0)+y0;
+            lastidx = i;
+        }
+    }
+    p->lastidx = lastidx;
+    return OK;
+}
+
+// ay bpfcos ax, x0, y0, x1, y1, ...
+static int32_t bpfcos_a_am_kr(CSOUND *csound, BPF_a_am *p) {
+    MYFLT *out = p->out;
+    MYFLT *in = p->in;
+    uint32_t datalen = p->INOCOUNT - 1;
+    int64_t lastidx = p->lastidx;
+
+    AUDIO_OPCODE(csound, p);
+    AUDIO_OUTPUT(out);
+
+    MYFLT **data = p->data;
+
+    int32_t i;
+
+    MYFLT x, x0, x1, y0, y1, firsty, lasty, dx;
+    firsty = *data[1];
+    lasty = *data[datalen-1];
+
+    for(n=offset; n<nsmps; n++) {
+        x = in[n];
+        i = (int32_t) bpfx_find(data, x, datalen, (int32_t) lastidx);
+        if(i == -1) {
+            out[n] = firsty;
+            lastidx = -1;
+        } else if (i == -2) {
+            out[n] = lasty;
+            lastidx = -1;
+        } else {
+            x0 = *data[i];
+            x1 = *data[i+2];
+            if(UNLIKELY(x0 > x || x >= x1))
+                return NOTOK;
+            y0 = *data[i+1];
+            y1 = *data[i+3];
+            dx = ((x-x0) / (x1-x0)) * PI + PI;
+            out[n] = y0 + ((y1 - y0) * (1 + COS(dx)) / 2.0);
+            lastidx = i;
+        }
+    }
+    p->lastidx = lastidx;
+    return OK;
+}
+
+// itab ftgen 0, 0, -2, 0, 100, 200
+// aidx bpftab ax, ixtable
+// ay table aidx, itab
+// ay vecinterp kys[], aidx
+
+
+// ky vecinterp kidx, kys[], imode=0, iparam=0
+// ay vecinterp aidx, kys[], imode=0, iparam=0
+
+
+
+// kys[] bpfcos kxs[], kx0, ky0, kx1, ky1, ...
+
+static int32_t bpfcos_K_Km_kr(CSOUND *csound, BPF_K_Km *p) {
+    if (UNLIKELY(p->in->dimensions != 1 || p->in->sizes == NULL ||
+                   p->out->dimensions != 1))
+        return PERFERR(Str("bpf: expected one-dimensional arrays"));
+    int32_t N = p->in->sizes[0];
+    if (UNLIKELY(tabcheck(csound, p->out, N, &p->h) != OK))
+        return NOTOK;
+
+    MYFLT **data = p->data;
+    MYFLT *out = p->out->data;
+    MYFLT *in  = p->in->data;
+
+    int32_t datalen = p->INOCOUNT - 1;
+    int32_t idx, i;
+    MYFLT x, x0, x1, y0, y1, firsty, lasty, dx;
+    firsty = *data[1];
+    lasty = *data[datalen-1];
+    int32_t lastidx = p->lastidx;
+
+    for(idx=0; idx<N; idx++) {
+        x = in[idx];
+        i = (int32_t) bpfx_find(data, x, datalen, (int32_t) lastidx);
+
+        if(i == -1) {
+            out[idx] = firsty;
+            lastidx = -1;
+        } else if (i == -2) {
+            out[idx] = lasty;
+            lastidx = -1;
+        } else {
+            x0 = *data[i];
+            x1 = *data[i+2];
+            if(UNLIKELY(x0 > x || x >= x1))
+                return NOTOK;
+            y0 = *data[i+1];
+            y1 = *data[i+3];
+            dx = ((x-x0) / (x1-x0)) * PI + PI;
+            out[idx] = y0 + ((y1 - y0) * (1 + COS(dx)) / 2.0);
+            lastidx = i;
+        }
+    }
+    p->lastidx = lastidx;
+    return OK;
+}
+
+/*  ntom  - mton
+
+        midi to notename conversion
+
+    imidi = ntom("A4-31")
+    kmidi = ntom(Snotename)
+
+    Snotename = mton(69.5)
+    Snotename = mton(kmidi)
+
+ */
+
+typedef struct {
+    OPDS h;
+    MYFLT *r;
+    STRINGDAT *notename;
+} NTOM;
+
+static int32_t _pcs[] = {9, 11, 0, 2, 4, 5, 7};
+
+#define FAIL -999
+
+static MYFLT ntomfunc(CSOUND *csound, char *note) {
+    char *n = note;
+    uint32_t notelen = (uint32_t) strlen(note);
+    int32_t octave = n[0] - '0';
+    int32_t pcidx = n[1] - 'A';
+    if (pcidx < 0 || pcidx >= 7) {
+        csound->Message(csound,
+                        Str("expecting a char between A and G, but got %c\n"),
+                        n[1]);
+        return FAIL;
+    }
+    int32_t pc = _pcs[pcidx];
+    int32_t cents = 0;
+    int32_t cursor;
+    if (n[2] == '#') {
+        pc += 1;
+        cursor = 3;
+    } else if (n[2] == 'b') {
+        pc -= 1;
+        cursor = 3;
+    } else {
+        cursor = 2;
+    }
+    int32_t rest = notelen - cursor;
+    if (rest > 0) {
+        int32_t sign = n[cursor] == '+' ? 1 : -1;
+        if (rest == 1) {
+            cents = 50;
+        } else if (rest == 2) {
+            cents = n[cursor + 1] - '0';
+        } else if (rest == 3) {
+            cents = 10 * (n[cursor + 1] - '0') + (n[cursor + 2] - '0');
+        } else {
+            csound->Message(csound,Str("format not understood, note: "
+                                       "%s, notelen: %d\n"), n, notelen);
+            return FAIL;
+        }
+        cents *= sign;
+    }
+    return ((octave + 1) * 12 + pc) + cents / FL(100.0);
+}
+
+
+static int32_t
+ntom(CSOUND *csound, NTOM *p) {
+    /*
+       formats accepted: 8D+ (equals to +50 cents), 4C#, 8A-31 7Bb+30
+       - no lowercase
+       - octave is necessary and comes always first
+       - no negative octaves, no octaves higher than 9
+    */
+    MYFLT midi = ntomfunc(csound, p->notename->data);
+    if(midi == FAIL)
+        return NOTOK;
+    *p->r = midi;
+    return OK;
+}
+
+
+/*
+
+   mton -- midi to note
+
+   Snote mton 69.5   -> 4A+50
+
+ */
+
+typedef struct {
+    OPDS h;
+    STRINGDAT *Sdst;
+    MYFLT *kmidi;
+} MTON;
+
+//                                C  C# D D#  E  F  F# G G# A Bb B
+static const int32_t _pc2idx[] = {2, 2, 3, 3, 4, 5, 5, 6, 6, 0, 1, 1};
+static const int32_t _pc2alt[] = {0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 2, 0};
+static const char _alts[] = " #b";
+
+static int32_t
+mton_common(CSOUND *csound, MTON *p, int32_t init) {
+    double m = (double)*p->kmidi;
+    double whole = floor(m);
+    /* Leave room for a carry when rounding cents to the next note. */
+    if (UNLIKELY(!(whole >= INT32_MIN && whole < INT32_MAX))) {
+        return init ? INITERR(Str("mton: note number out of range"))
+                    : PERFERR(Str("mton: note number out of range"));
+    }
+    int32_t note = (int32_t)whole;
+    int32_t cents = (int32_t)round((m - whole) * 100.0);
+    if (cents > 50) {
+        cents -= 100;
+        note += 1;
+    }
+    int32_t octave = note / 12 - 1;
+    int32_t pc = note % 12;
+    if (pc < 0) {
+        pc += 12;
+        octave -= 1;
+    }
+
+    /* Enough for any int32 note's signed octave, accidental and cents. */
+    const int32_t maxsize = 24;
+    if (p->Sdst->data == NULL || p->Sdst->size < maxsize) {
+        char *data = csound->ReAlloc(csound, p->Sdst->data, maxsize);
+        if (UNLIKELY(data == NULL)) {
+            return init ? INITERR(Str("memory allocation failure"))
+                        : PERFERR(Str("memory allocation failure"));
+        }
+        p->Sdst->data = data;
+        p->Sdst->size = maxsize;
+    }
+    char *dst = p->Sdst->data;
+    int32_t cursor = snprintf(dst, maxsize, "%d%c", octave,
+                              'A' + _pc2idx[pc]);
+    int32_t alt = _pc2alt[pc];
+    if (alt > 0)
+        dst[cursor++] = _alts[alt];
+    if (cents != 0) {
+        dst[cursor++] = cents > 0 ? '+' : '-';
+        if (cents < 0)
+            cents = -cents;
+        if (cents != 50) {
+            if (cents >= 10)
+                dst[cursor++] = '0' + cents / 10;
+            dst[cursor++] = '0' + cents % 10;
+        }
+    }
+    dst[cursor] = '\0';
+    return OK;
+}
+
+static int32_t
+mton_init(CSOUND *csound, MTON *p) {
+    return mton_common(csound, p, 1);
+}
+
+static int32_t
+mton(CSOUND *csound, MTON *p) {
+    return mton_common(csound, p, 0);
+}
+
+/*
+
+   ntof -- notename to frequency
+
+   kfreq ntof Snotename
+
+   kfreq = ntof("4A")  -> 440 (depending on the value of a4 variable)
+
+ */
+
+static int32_t
+ntof(CSOUND *csound, NTOM *p) {
+    MYFLT midi = ntomfunc(csound, p->notename->data);
+    if(midi == FAIL)
+        return NOTOK;
+    MYFLT a4 = csound->GetA4(csound);
+    *p->r = mtof_func(midi, a4);
+    return OK;
+}
+
+
+/*
+
+   cmp
+
+   aout cmp a1, ">", a2
+   aout cmp a1, "<=", k2
+   aout cmp a1, "==", 0
+
+   kOut[] cmp kA[], "<", k1
+   kOut[] cmp kA[], "<", kB[]
+   kOut[] cmp k1, "<", kA[], "<=", k2
+
+ */
+
+typedef struct {
+    OPDS h;
+    MYFLT *out, *a0;
+    STRINGDAT *op;
+    MYFLT *a1;
+    int32_t mode;
+} Cmp;
+
+typedef struct {
+    OPDS h;
+    ARRAYDAT *out;
+    ARRAYDAT *in;
+    STRINGDAT *op;
+    MYFLT *k1;
+    int32_t mode;
+} Cmp_array1;
+
+typedef struct {
+    OPDS h;
+    ARRAYDAT *out;
+    ARRAYDAT *in1;
+    STRINGDAT *op;
+    ARRAYDAT *in2;
+    int32_t mode;
+} Cmp_array2;
+
+typedef struct {
+    OPDS h;
+    ARRAYDAT *out;
+    MYFLT *a;
+    STRINGDAT *op1;
+    ARRAYDAT *in;
+    STRINGDAT *op2;
+    MYFLT *b;
+    int32_t mode;
+} Cmp2_array1;
+
+static int32_t op2mode(const char *op) {
+    if (strcmp(op, ">") == 0) return 0;
+    if (strcmp(op, ">=") == 0) return 1;
+    if (strcmp(op, "<") == 0) return 2;
+    if (strcmp(op, "<=") == 0) return 3;
+    /* Keep the historical single-equals alias. */
+    if (strcmp(op, "==") == 0 || strcmp(op, "=") == 0) return 4;
+    if (strcmp(op, "!=") == 0) return 5;
+    return -1;
+}
+
+static int32_t
+cmp_init(CSOUND *csound, Cmp *p) {
+    int32_t mode = op2mode(p->op->data);
+    if(mode == -1) {
+        return INITERR(Str("cmp: unknown operator. "
+                           "Expecting <, <=, >, >=, ==, !="));
+    }
+    p->mode = mode;
+    return OK;
+}
+
+static int32_t
+cmparray1_init(CSOUND *csound, Cmp_array1 *p) {
+    int32_t N = p->in->sizes[0];
+    if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+      return csound_array_init_resize_error(csound);
+    int32_t mode = op2mode(p->op->data);
+    if(mode == -1) {
+        return INITERR(Str("cmp: unknown operator. "
+                           "Expecting <, <=, >, >=, ==, !="));
+    }
+    p->mode = mode;
+    return OK;
+}
+
+static int32_t
+cmparray2_init(CSOUND *csound, Cmp_array2 *p) {
+    int32_t N1 = p->in1->sizes[0];
+    int32_t N2 = p->in2->sizes[0];
+    int32_t N = N1 < N2 ? N1 : N2;
+
+    // make sure that we can put the result in `out`,
+    // grow the array if necessary
+    if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+      return csound_array_init_resize_error(csound);
+    int32_t mode = op2mode(p->op->data);
+    if(mode == -1) {
+        return INITERR(Str("cmp: unknown operator. "
+                           "Expecting <, <=, >, >=, ==, !="));
+    }
+    p->mode = mode;
+    return OK;
+}
+
+static int32_t
+cmp2array1_init(CSOUND *csound, Cmp2_array1 *p) {
+    int32_t N = p->in->sizes[0];
+    if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+      return csound_array_init_resize_error(csound);
+
+    int32_t mode1 = op2mode(p->op1->data);
+    int32_t mode2 = op2mode(p->op2->data);
+    if (mode1 != 2 && mode1 != 3)
+        return INITERR(Str("cmp (ternary comparator): operator 1 expected < or <="));
+    if (mode2 != 2 && mode2 != 3)
+        return INITERR(Str("cmp (ternary comparator): operator 2 expected < or <="));
+    p->mode = (mode1 - 2) + 2 * (mode2 - 2);
+    return OK;
+}
+
+static int32_t
+cmp_aa(CSOUND *csound, Cmp* p) {
+    IGN(csound);
+
+    SAMPLE_ACCURATE
+
+    MYFLT *a0 = p->a0;
+    MYFLT *a1 = p->a1;
+
+    switch(p->mode) {
+    case 0:
+        for(n=offset; n<nsmps; n++) {
+            out[n] = a0[n] > a1[n];
+        }
+        break;
+    case 1:
+        for(n=offset; n<nsmps; n++) {
+            out[n] = a0[n] >= a1[n];
+        }
+        break;
+    case 2:
+        for(n=offset; n<nsmps; n++) {
+            out[n] = a0[n] < a1[n];
+        }
+        break;
+    case 3:
+        for(n=offset; n<nsmps; n++) {
+            out[n] = a0[n] <= a1[n];
+        }
+        break;
+    case 4:
+        for(n=offset; n<nsmps; n++) {
+            out[n] = a0[n] == a1[n];
+        }
+        break;
+    case 5:
+        for(n=offset; n<nsmps; n++) {
+            out[n] = a0[n] != a1[n];
+        }
+        break;
+    }
+    return OK;
+}
+
+static int32_t
+cmp_ak(CSOUND *csound, Cmp *p) {
+    IGN(csound);
+
+    SAMPLE_ACCURATE
+
+    MYFLT *a0 = p->a0;
+    MYFLT a1 = *(p->a1);
+
+    switch(p->mode) {
+    case 0:
+        for(n=offset; n<nsmps; n++) {
+            out[n] = a0[n] > a1;
+        }
+        break;
+    case 1:
+        for(n=offset; n<nsmps; n++) {
+            out[n] = a0[n] >= a1;
+        }
+        break;
+    case 2:
+        for(n=offset; n<nsmps; n++) {
+            out[n] = a0[n] < a1;
+        }
+        break;
+    case 3:
+        for(n=offset; n<nsmps; n++) {
+            out[n] = a0[n] <= a1;
+        }
+        break;
+    case 4:
+        for(n=offset; n<nsmps; n++) {
+            out[n] = a0[n] == a1;
+        }
+        break;
+    case 5:
+        for(n=offset; n<nsmps; n++) {
+            out[n] = a0[n] != a1;
+        }
+        break;
+    }
+    return OK;
+}
+
+static int32_t
+cmparray1_k(CSOUND *csound, Cmp_array1 *p) {
+    int32_t L = p->in->sizes[0];
+    if (UNLIKELY(ARRAY_ENSURESIZE_PERF(csound, p->out, L) != OK))
+        return NOTOK;
+
+    MYFLT *out = p->out->data;
+    MYFLT *in  = p->in->data;
+    MYFLT k1 = *p->k1;
+    int32_t i;
+
+    switch(p->mode) {
+    case 0:
+        for(i=0; i<L; i++) {
+            out[i] = in[i] > k1;
+        }
+        break;
+    case 1:
+        for(i=0; i<L; i++) {
+            out[i] = in[i] >= k1;
+        }
+        break;
+    case 2:
+        for(i=0; i<L; i++) {
+            out[i] = in[i] < k1;
+        }
+        break;
+    case 3:
+        for(i=0; i<L; i++) {
+            out[i] = in[i] <= k1;
+        }
+        break;
+    case 4:
+        for(i=0; i<L; i++) {
+            out[i] = in[i] == k1;
+        }
+        break;
+    case 5:
+        for(i=0; i<L; i++) {
+            out[i] = in[i] != k1;
+        }
+        break;
+    }
+    return OK;
+}
+
+static int32_t
+cmparray1_i(CSOUND *csound, Cmp_array1 *p) {
+    if (UNLIKELY(cmparray1_init(csound, p) != OK))
+        return NOTOK;
+    return cmparray1_k(csound, p);
+}
+
+
+static int32_t
+cmp2array1_k(CSOUND *csound, Cmp2_array1 *p) {
+    int32_t L = p->in->sizes[0];
+    if (UNLIKELY(ARRAY_ENSURESIZE_PERF(csound, p->out, L) != OK))
+        return NOTOK;
+
+    MYFLT *out = p->out->data;
+    MYFLT *in  = p->in->data;
+    MYFLT a = *p->a;
+    MYFLT b = *p->b;
+    int32_t i;
+    MYFLT x;
+
+    switch(p->mode) {
+    case 0:   // 00 -> <   <
+        for(i=0; i<L; i++) {
+            x = in[i];
+            out[i] = (a < x) && (x < b);
+        }
+        break;
+    case 1:   // 01 -> <=   <
+        for(i=0; i<L; i++) {
+            x = in[i];
+            out[i] = (a <= x) && (x < b);
+        }
+        break;
+    case 2:   // 10 -> <   <=
+        for(i=0; i<L; i++) {
+            x = in[i];
+            out[i] = (a < x) && (x <= b);
+        }
+        break;
+    case 3:   // 11 -> <=   <=
+        for(i=0; i<L; i++) {
+            x = in[i];
+            out[i] = (a <= x) && (x <= b);
+        }
+        break;
+    }
+    return OK;
+}
+
+static int32_t
+cmp2array1_i(CSOUND *csound, Cmp2_array1 *p) {
+    if (UNLIKELY(cmp2array1_init(csound, p) != OK))
+        return NOTOK;
+    return cmp2array1_k(csound, p);
+}
+
+static int32_t
+cmparray2_k(CSOUND *csound, Cmp_array2 *p) {
+    int32_t N1 = p->in1->sizes[0];
+    int32_t N2 = p->in2->sizes[0];
+    int32_t L = N1 < N2 ? N1 : N2;
+    if (UNLIKELY(ARRAY_ENSURESIZE_PERF(csound, p->out, L) != OK))
+        return NOTOK;
+
+    MYFLT *out = p->out->data;
+    MYFLT *in1  = p->in1->data;
+    MYFLT *in2  = p->in2->data;
+    int32_t i;
+    switch(p->mode) {
+    case 0:
+        for(i=0; i<L; i++) {
+            out[i] = in1[i] > in2[i];
+        }
+        break;
+    case 1:
+        for(i=0; i<L; i++) {
+            out[i] = in1[i] >= in2[i];
+        }
+        break;
+    case 2:
+        for(i=0; i<L; i++) {
+            out[i] = in1[i] < in2[i];
+        }
+        break;
+    case 3:
+        for(i=0; i<L; i++) {
+            out[i] = in1[i] <= in2[i];
+        }
+        break;
+    case 4:
+        for(i=0; i<L; i++) {
+            out[i] = in1[i] == in2[i];
+        }
+        break;
+    case 5:
+        for(i=0; i<L; i++) {
+            out[i] = in1[i] != in2[i];
+        }
+        break;
+    }
+    return OK;
+}
+
+static int32_t
+cmparray2_i(CSOUND *csound, Cmp_array2 *p) {
+    if (UNLIKELY(cmparray2_init(csound, p) != OK))
+        return NOTOK;
+    return cmparray2_k(csound, p);
+}
+
+
+/*
+  ftslice
+
+  ftslice sourceTable:i, destTable:i, startIndex:k=0, endIndex:k=0, step:k=1
+
+  copy slice from source table to dest table (end is not inclusive)
+
+  sourceTable: the source table number
+  destTable  : the destination table number
+  startIndex : the index to start copying
+  endIndex   : the index to end copying. NOT INCLUSIVE
+  step       : how many indices to jump (1=contiguous)
+
+  See also: tab2array
+*/
+
+typedef struct {
+    OPDS h;
+    MYFLT *fnsrc, *fndst, *kstart, *kend, *kstep;
+    FUNC *ftpsrc;
+    FUNC *ftpdst;
+} TABSLICE;
+
+static int32_t
+tabslice_tables(CSOUND *csound, TABSLICE *p, int32_t init) {
+    double source = (double)*p->fnsrc, dest = (double)*p->fndst;
+    if (UNLIKELY(!(source >= INT32_MIN && source <= INT32_MAX &&
+                   dest >= INT32_MIN && dest <= INT32_MAX)))
+        return init ? INITERR(Str("ftslice: table number out of range"))
+                    : PERFERR(Str("ftslice: table number out of range"));
+    p->ftpsrc = csound->FTFind(csound, p->fnsrc);
+    if (UNLIKELY(p->ftpsrc == NULL))
+        return init ? INITERRF(Str("Source table not found: %g"), *p->fnsrc)
+                    : PERFERRF(Str("Source table not found: %g"), *p->fnsrc);
+    p->ftpdst = csound->FTFind(csound, p->fndst);
+    if (UNLIKELY(p->ftpdst == NULL))
+        return init ? INITERRF(Str("Destination table not found: %g"), *p->fndst)
+                    : PERFERRF(Str("Destination table not found: %g"), *p->fndst);
+    return OK;
+}
+
+static int32_t
+tabslice_init(CSOUND *csound, TABSLICE *p) {
+    return tabslice_tables(csound, p, 1);
+}
+
+static int32_t
+tabslice_copy(CSOUND *csound, TABSLICE *p, int32_t init) {
+    FUNC *ftpsrc = p->ftpsrc;
+    FUNC *ftpdst = p->ftpdst;
+    double startval = (double)*p->kstart;
+    double endval = (double)*p->kend;
+    double stepval = (double)*p->kstep;
+    if (UNLIKELY(!(startval >= 0 && startval <= ftpsrc->flen &&
+                   endval >= INT32_MIN && endval < (double)INT32_MAX + 1 &&
+                   stepval >= 1 && stepval < (double)INT32_MAX + 1)))
+        return init ? INITERR(Str("ftslice: invalid slice bounds or step"))
+                    : PERFERR(Str("ftslice: invalid slice bounds or step"));
+    int32_t start = (int32_t)startval;
+    int32_t end = (int32_t)endval;
+    int32_t step = (int32_t)stepval;
+    if (end < 1 || end > (int32_t)ftpsrc->flen)
+        end = ftpsrc->flen;
+    if (start >= end)
+        return OK;
+    /* Count exactly, without rounding through float or overflowing a sum. */
+    int32_t numitems = 1 + (end - start - 1) / step;
+    if (numitems > (int32_t)ftpdst->flen)
+        numitems = (int32_t)ftpdst->flen;
+    MYFLT *src = ftpsrc->ftable;
+    MYFLT *dst = ftpdst->ftable;
+
+    /* A large step can take the final index beyond INT32_MAX. */
+    int64_t j = start;
+    for (int32_t i = 0; i < numitems; i++, j += step)
+        dst[i] = src[j];
+    return OK;
+}
+
+static int32_t
+tabslice_k(CSOUND *csound, TABSLICE *p) {
+    return tabslice_copy(csound, p, 0);
+}
+
+static int32_t
+tabslice_allk(CSOUND *csound, TABSLICE *p) {
+    if (UNLIKELY(tabslice_tables(csound, p, 0) != OK))
+        return NOTOK;
+    return tabslice_copy(csound, p, 0);
+}
+
+static int32_t
+tabslice_i(CSOUND *csound, TABSLICE *p) {
+    if (UNLIKELY(tabslice_tables(csound, p, 1) != OK))
+        return NOTOK;
+    return tabslice_copy(csound, p, 1);
+}
+
+/*
+  ftset
+
+  ftset table:k, value:k, startIndex:k=0, endIndex:k=0, step:k=1
+
+  Set elements of table to value
+
+  table      : the table to modify
+  value      : the value to set the table elements to
+  startIndex : the index to start copying
+  endIndex   : the index to end copying. NOT INCLUSIVE
+  step       : how many indices to jump (1=contiguous)
+
+  ftset ift, 0      ; clears the table
+  ftset ift, 1, 10  ; set elements between index 10 and end of the table to 1
+
+*/
+
+typedef struct {
+    OPDS h;
+    MYFLT *tabnum, *value, *kstart, *kend, *kstep;
+    FUNC *tab;
+    int32_t lastTabnum;
+} FTSET;
+
+
+static int32_t
+ftset_init(CSOUND *csound, FTSET *p) {
+    IGN(csound);
+    p->tab = NULL;
+    return OK;
+}
+
+static int32_t
+ftset_common(CSOUND *csound, FTSET *p, int32_t init) {
+    double number = (double)*p->tabnum;
+    if (UNLIKELY(!(number >= INT32_MIN && number <= INT32_MAX)))
+        return INITPERFERR(init, Str("ftset: table number out of range"));
+    /* Use the same rounding as FTFind when caching the table number. */
+    int32_t tabnum = MYFLT2LONG(*p->tabnum);
+    if (p->tab == NULL || tabnum != p->lastTabnum) {
+        p->tab = csound->FTFind(csound, p->tabnum);
+        if (UNLIKELY(p->tab == NULL))
+            return INITPERFERRF(init, Str("Table %g not found"), *p->tabnum);
+        p->lastTabnum = tabnum;
+    }
+    MYFLT *data = p->tab->ftable;
+    int32_t tablen = p->tab->flen;
+    double startval = (double)*p->kstart;
+    double endval = (double)*p->kend;
+    double stepval = (double)*p->kstep;
+    if (UNLIKELY(!(startval >= 0 && startval <= tablen &&
+                   endval >= -tablen && endval < (double)INT32_MAX + 1 &&
+                   stepval >= 1 && stepval < (double)INT32_MAX + 1)))
+        return INITPERFERR(init, Str("ftset: invalid slice bounds or step"));
+    int32_t start = (int32_t)startval;
+    int32_t end = (int32_t)endval;
+    int32_t step = (int32_t)stepval;
+    MYFLT value = *p->value;
+
+    if (end <= 0)
+        end += tablen;
+    else if (end > tablen)
+        end = tablen;
+    if (start >= end)
+        return OK;
+
+    if (step == 1 && value == 0) {
+        memset(data + start, '\0', sizeof(MYFLT) * (end - start));
+        return OK;
+    }
+
+    /* The final increment can exceed INT32_MAX even for a valid slice. */
+    for (int64_t i = start; i < end; i += step)
+        data[i] = value;
+    return OK;
+}
+
+static int32_t
+ftset_k(CSOUND *csound, FTSET *p) {
+    return ftset_common(csound, p, 0);
+}
+
+static int32_t
+ftset_i(CSOUND *csound, FTSET *p) {
+    ftset_init(csound, p);
+    return ftset_common(csound, p, 1);
+}
+
+/*
+
+  tab2array
+
+  kout[] tab2array ifn, kstart=0, kend=0, kstep=1
+  iout[] tab2array ifn, istart=0, iend=0, istep=1
+
+  copy slice from table into an array
+
+  kstart: start index
+  kend: end index (not inclusive). 0=end of table/array
+  kstep: increment
+
+  To copy a slice of an array, see slicearray
+
+ */
+
+
+typedef struct {
+    OPDS h;
+    ARRAYDAT *out;
+    MYFLT *ifn, *kstart, *kend, *kstep;
+    FUNC *ftp;
+} TAB2ARRAY;
+
+static int32_t
+tab2array_common(CSOUND *csound, TAB2ARRAY *p, int32_t init, int32_t copy) {
+    if (init) {
+        double number = (double)*p->ifn;
+        if (UNLIKELY(!(number >= INT32_MIN && number <= INT32_MAX)))
+            return INITERR(Str("tab2array: table number out of range"));
+        p->ftp = csound->FTFind(csound, p->ifn);
+        if (UNLIKELY(p->ftp == NULL))
+            return NOTOK;
+    }
+    if (UNLIKELY(p->out->dimensions > 1))
+        return init ? INITERR(Str("tab2array: expected a one-dimensional output"))
+                    : PERFERR(Str("tab2array: expected a one-dimensional output"));
+    double startval = (double)*p->kstart;
+    double endval = (double)*p->kend;
+    double stepval = (double)*p->kstep;
+    if (UNLIKELY(!(startval >= 0 && startval <= p->ftp->flen &&
+                   endval >= INT32_MIN && endval < (double)INT32_MAX + 1 &&
+                   stepval >= 1 && stepval < (double)INT32_MAX + 1)))
+        return init ? INITERR(Str("tab2array: invalid slice bounds or step"))
+                    : PERFERR(Str("tab2array: invalid slice bounds or step"));
+    int32_t start = (int32_t)startval;
+    int32_t end = (int32_t)endval;
+    int32_t step = (int32_t)stepval;
+    if (end < 1 || end > (int32_t)p->ftp->flen)
+        end = p->ftp->flen;
+    int32_t numitems = end > start ? 1 + (end - start - 1) / step : 0;
+    if (init) {
+        if (UNLIKELY(tabinit(csound, p->out, numitems, p->h.insdshead) != OK))
+            return csound_array_init_resize_error(csound);
+    } else if (UNLIKELY(tabcheck(csound, p->out, numitems, &p->h) != OK)) {
+        return NOTOK;
+    }
+    if (copy) {
+        MYFLT *out = p->out->data;
+        MYFLT *table = p->ftp->ftable;
+        /* The final step can exceed INT32_MAX even for a valid slice. */
+        int64_t index = start;
+        for (int32_t i = 0; i < numitems; i++, index += step)
+            out[i] = table[index];
+    }
+    return OK;
+}
+
+static int32_t
+tab2array_init(CSOUND *csound, TAB2ARRAY *p) {
+    return tab2array_common(csound, p, 1, 0);
+}
+
+static int32_t
+tab2array_k(CSOUND *csound, TAB2ARRAY *p) {
+    return tab2array_common(csound, p, 0, 1);
+}
+
+static int32_t
+tab2array_i(CSOUND *csound, TAB2ARRAY *p) {
+    return tab2array_common(csound, p, 1, 1);
+}
+
+
+/*
+
+  reshapearray
+
+  Reshape an array, maintaining the capacity of the array
+  (it does NOT resize the array).
+
+  You can reshape a 2D array to another array of equal capacity
+  of reshape a 1D array to a 2D array, or a 2D array to a 1D
+  array
+
+  reshapearray array[], isize1 [, ..., isizen]
+
+  works with i and k arrays, at i-time
+
+  1:  if the sizes of the array and the size of the reshaped array do not match
+it needs an error message. Currently it is rather silent.
+
+2: in calculating the sizes if numcols is zero (the default value)
+multiplying by zero always leads to an error.
+
+3:  in numrows is 0 you end up with a 0 x 0 array.
+
+(3, 5)
+
+0   1  2  3  4
+10 11 12 13 14
+20 21 22 23 24
+
+*/
+
+typedef struct {
+    OPDS h;
+    ARRAYDAT *in;
+    MYFLT *dims[20];
+} ARRAYRESHAPE;
+
+static int32_t
+arrayreshape(CSOUND *csound, ARRAYRESHAPE *p) {
+    ARRAYDAT *a = p->in;
+    int32_t numdims = p->INOCOUNT - 1;
+
+    int32_t orig_numitems = 1;
+    for(int i=0; i < a->dimensions; i++) {
+        orig_numitems *= a->sizes[i];
+    }
+    int32_t numitems = 1;
+    for(int i=0; i < numdims; i++) {
+        MYFLT dim = *(p->dims[i]);
+        int32_t idim = (int32_t)dim;
+        if(idim <= 0) {
+            return INITERRF(Str("reshapearray: invalid dimension at index %d, a dimension must be >= 0, got %d"), i, (int)dim);
+        }
+        numitems *= idim;
+    }
+
+    if(numitems != orig_numitems)
+      return INITERRF(Str("reshapearray: The number of items do not match."
+                          "The array has %d elements, but the new shape"
+                          "results in %d total elements"),
+                      orig_numitems, numitems);
+
+    if (UNLIKELY(csound_array_prepare_write(csound, a,
+                                            p->h.insdshead) != OK)) {
+      return INITERRF("%s",
+                      Str("reshapearray: could not detach shared array"));
+    }
+
+    if(a->dimensions != numdims) {
+        a->dimensions = numdims;
+        a->sizes = csound->ReAlloc(csound, a->sizes, sizeof(int32_t)*numdims);
+    }
+
+    for(int i=0; i < numdims; i++) {
+        a->sizes[i] = (int32_t)(*(p->dims[i]));
+    }
+
+    return OK;
+}
+
+
+/*
+  printarray
+
+  printarray karray[], [ktrig], [Sfmt], [Slabel]
+  printarray iarray[], [Sfmt], [Slabel]
+  printarray Sarray[], [ktrig], [Sfmt], [Slabel]
+
+  Prints all the elements of the array (1- and 2- dymensions).
+
+  ktrig=1   in the k-version, controls when to print
+            if ktrig is -1, prints each cycle. Otherwise, prints whenever
+            ktrig changes from 0 to 1
+  Sfmt      Sets the format (passed to printf) for each element of the
+            array (default="%.4f")
+  Slabel    Optional string to print before the whole array
+
+  Works with 1- and 2-dimensional arrays, at i- and k-time
+
+*/
+
+typedef struct {
+    OPDS h;
+    ARRAYDAT *in;
+    MYFLT *trig;
+    STRINGDAT *Sfmt;
+    STRINGDAT *Slabel;
+
+    int32_t lasttrig;
+    const char *printfmt;
+    char fmtdata[128];
+    const char *label;
+} ARRAYPRINTK;
+
+typedef struct {
+    OPDS h;
+    ARRAYDAT *in;
+    STRINGDAT *Sfmt;
+    STRINGDAT *Slabel;
+    int32_t lasttrig;
+
+    const char *printfmt;
+    char fmtdata[128];
+    const char *label;
+} ARRAYPRINT;
+
+#define ARRPRINT_SEP (csound->MessageS(csound, CSOUNDMSG_ORCH, "\n"))
+#define ARRPRINT_MAXLINE 2048
+#define ARRPRINT_IDXLIMIT 100
+
+
+static const uint32_t print_linelength = 80;
+static const char default_printfmt[] = "%.4f";
+static const char default_printfmt_str[] = "\"%s\"";
+
+/** replace all occurrences of needle within src by replacement
+ * and put the result in target, which should have enough memory to
+ * hold the result
+*/
+
+void str_replace(char *dest, const char *src, const char *needle,
+                 const char *replacement)
+{
+    char buffer[512] = { 0 };
+    char *insert_point = &buffer[0];
+    const char *tmp = src;
+    size_t needle_len = strlen(needle);
+    size_t repl_len = strlen(replacement);
+
+    while (1) {
+        const char *p = strstr(tmp, needle);
+
+        // walked past last occurrence of needle; copy remaining part
+        if (p == NULL) {
+            strcpy(insert_point, tmp);
+            break;
+        }
+
+        // copy part before needle
+        memcpy(insert_point, tmp, p - tmp);
+        insert_point += p - tmp;
+
+        // copy replacement string
+        memcpy(insert_point, replacement, repl_len);
+        insert_point += repl_len;
+
+        // adjust pointers, move on
+        tmp = p + needle_len;
+    }
+
+    // write altered string back to target
+    strcpy(dest, buffer);
+}
+
+
+static int32_t
+arrayprint_init(CSOUND *csound, ARRAYPRINTK *p) {
+    if(p->in->arrayType->varTypeName[0] == 'S' && p->in->dimensions > 1)
+        return INITERR(Str("cannot print multidimensional string arrays"));
+    if(p->in->dimensions > 2)
+        return INITERRF(Str("only 1-D and 2-D arrays supported, got %d dimensions"),
+                        p->in->dimensions);
+    p->lasttrig = 0;
+    char arraytype = p->in->arrayType->varTypeName[0];
+    const char *default_fmt =
+      arraytype == 'S' ? default_printfmt_str : default_printfmt;
+    p->printfmt =
+      (p->Sfmt == NULL || strlen(p->Sfmt->data) < 2) ? default_fmt : p->Sfmt->data;
+
+    if(strstr(p->printfmt, "%d") != NULL) {
+        str_replace(p->fmtdata, p->printfmt, "%d", "%.0f"); fflush(stdout);
+        p->printfmt = p->fmtdata;
+    }
+
+    p->label = p->Slabel != NULL ? p->Slabel->data : NULL;
+    return OK;
+}
+
+static int32_t
+arrayprint_init_notrig(CSOUND *csound, ARRAYPRINT *p) {
+    if(p->in->arrayType->varTypeName[0] == 'S' && p->in->dimensions > 1)
+        return INITERR(Str("cannot print multidimensional string arrays"));
+    // if(p->in->dimensions > 2)
+    //     return INITERRF(Str("only 1-D and 2-D arrays supported, got %d dimensions"),
+    //                     p->in->dimensions);
+    char arraytype = p->in->arrayType->varTypeName[0];
+    const char *default_fmt =
+      arraytype == 'S' ? default_printfmt_str : default_printfmt;
+    p->printfmt =
+      (p->Sfmt == NULL || strlen(p->Sfmt->data) < 2) ? default_fmt : p->Sfmt->data;
+
+    if(strstr(p->printfmt, "%d") != NULL) {
+        str_replace(p->fmtdata, p->printfmt, "%d", "%.0f"); fflush(stdout);
+        p->printfmt = p->fmtdata;
+    }
+
+    p->label = p->Slabel != NULL ? p->Slabel->data : NULL;
+    return OK;
+}
+
+
+// print a string arry
+static int32_t arrprint_str(CSOUND *csound, ARRAYDAT *arr,
+                            const char *fmt, const char *label) {
+    int32_t i;
+    uint32_t charswritten = 0;
+    char currline[ARRPRINT_MAXLINE];
+    const uint32_t linelength = print_linelength;
+    if(label != NULL)
+        csound->MessageS(csound, CSOUNDMSG_ORCH, "%s\n", label);
+    // fmt = "%s";  // TODO, set default fmt according to type of array
+    for(i = 0; i < arr->sizes[0]; ++i) {
+        if(charswritten > 0) {
+            currline[charswritten++] = ',';
+            currline[charswritten++] = ' ';
+        }
+        charswritten += snprintf(currline + charswritten, ARRPRINT_MAXLINE - charswritten, fmt,
+                                 csound_string_array_element(arr, i)->data);
+        if(charswritten >= linelength) {
+            currline[charswritten+1] = '\0';
+            csound->MessageS(csound, CSOUNDMSG_ORCH, " %s\n", (char*)currline);
+            charswritten = 0;
+        }
+    }
+
+    if(charswritten > 0) {
+        currline[charswritten+1] = '\0';
+        csound->MessageS(csound, CSOUNDMSG_ORCH, " %s\n", (char*)currline);
+    }
+    return OK;
+}
+
+// Print a 2D matrix from a multidimensional array
+static int32_t _printmtx(CSOUND *csound, MYFLT *data, int32_t offset, const char *fmt,
+                         int32_t numrows, int32_t numcols,
+                         int32_t startbrackets, int32_t endbrackets, int32_t margin) {
+
+    int32_t cursor = 0;
+    char colstr[ARRPRINT_MAXLINE];
+    int32_t linelength = ARRPRINT_MAXLINE - margin - numcols;
+    for(int r=0; r < numrows; r++) {
+        if(r == 0) {
+            int spaces = MAX(0, margin - startbrackets);
+            for(int i=0; i < spaces; i++) {
+                colstr[i] = ' ';
+            }
+            for(int i=0; i < startbrackets + 1; i++) {
+                colstr[spaces + i] = '[';
+            }
+            cursor = spaces + startbrackets + 1;
+        } else {
+            int spaces = margin + 1;
+            for(int i=0; i < spaces; i++) {
+                colstr[i] = ' ';
+            }
+            cursor = spaces;
+        }
+        for(int col=0; col < numcols; col++) {
+            if(cursor >= linelength)
+                break;
+            size_t index = offset + r * numcols + col;
+            MYFLT item = data[index];
+            if(col > 0) {
+                colstr[cursor++] = ' ';
+            }
+            cursor += snprintf(colstr + cursor, ARRPRINT_MAXLINE - cursor, fmt, item);
+        }
+        if(r == numrows - 1) {
+            for(int i=0; i < endbrackets + 1; i++) {
+                colstr[cursor++] = ']';
+            }
+        }
+        colstr[cursor++] = 0;
+        csound->MessageS(csound, CSOUNDMSG_ORCH, "%s\n", (char*)colstr);
+        cursor = 0;
+    }
+    return OK;
+}
+
+static int32_t _printsubarr(CSOUND *csound, MYFLT *data, int offset, const char *fmt, int numdims, const int *dims, int startbrackets, int endbrackets, int margin) {
+    if(numdims == 2) {
+        int numrows = dims[0];
+        int numcols = dims[1];
+        return _printmtx(csound, data, offset, fmt, numrows, numcols, startbrackets, endbrackets, margin);
+    } else {
+        int subsize = 1;
+        for(int i=1; i < numdims; i++) {
+            subsize *= dims[i];
+        }
+        for(int outerdim=0; outerdim < dims[0]; outerdim++) {
+            _printsubarr(csound, data, offset + outerdim * subsize, fmt, numdims - 1, &(dims[1]), (startbrackets + 1) * (outerdim==0), (endbrackets+1) * (outerdim == dims[0] - 1), margin);
+        }
+    }
+    return OK;
+}
+
+
+// print a numeric array
+static int32_t arrprint(CSOUND *csound, ARRAYDAT *arr,
+                         const char *fmt, const char *label) {
+    MYFLT *in = arr->data;
+    int32_t dims = arr->dimensions;
+    int32_t i, j, startidx;
+    const uint32_t linelength = print_linelength;
+    char currline[ARRPRINT_MAXLINE];
+    uint32_t charswritten = 0;
+    int32_t showidx = 0;
+    if(label != NULL) {
+        csound->MessageS(csound, CSOUNDMSG_ORCH, "%s\n", label);
+    }
+    switch(dims) {
+    case 1:
+        startidx = 0;
+        if (arr->sizes[0] > ARRPRINT_IDXLIMIT) {
+            showidx = 1;
+        }
+        for(i=0; i<arr->sizes[0]; i++) {
+          charswritten += snprintf(currline+charswritten, ARRPRINT_MAXLINE - charswritten, fmt, in[i]);
+            if(charswritten < linelength) {
+                currline[charswritten++] = ' ';
+            } else {
+                currline[charswritten+1] = '\0';
+                if (showidx) {
+                    csound->MessageS(csound, CSOUNDMSG_ORCH,
+                                     " %3d: %s\n", startidx, (char*)currline);
+                } else {
+                    csound->MessageS(csound, CSOUNDMSG_ORCH,
+                                     " %s\n", (char*)currline);
+                }
+                charswritten = 0;
+                startidx = i+1;
+            }
+        }
+        if (charswritten > 0) {
+            currline[charswritten] = '\0';
+            if (showidx) {
+                csound->MessageS(csound, CSOUNDMSG_ORCH,
+                                 " %3d: %s\n", startidx, (char*)currline);
+            } else {
+                csound->MessageS(csound, CSOUNDMSG_ORCH,
+                                 " %s\n", (char*)currline);
+            }
+        }
+        break;
+    case 2:
+        for(i=0; i<arr->sizes[0]; i++) {
+          charswritten += snprintf(currline+charswritten, ARRPRINT_MAXLINE - charswritten, " %3d: ", i);
+            for(j=0; j<arr->sizes[1]; j++) {
+              charswritten += snprintf(currline+charswritten, ARRPRINT_MAXLINE - charswritten, fmt, *in);
+                if(charswritten < linelength) {
+                    currline[charswritten++] = ' ';
+                }
+                else {
+                    currline[charswritten+1] = '\0';
+                    csound->MessageS(csound, CSOUNDMSG_ORCH,
+                                     "%s\n", (char*)currline);
+                    charswritten = 0;
+                }
+                in++;
+            }
+            if (charswritten > 0) {
+                currline[charswritten] = '\0';
+                csound->MessageS(csound, CSOUNDMSG_ORCH, "%s\n", (char*)currline);
+                charswritten = 0;
+            }
+        }
+        break;
+    default:
+        _printsubarr(csound, arr->data, 0, fmt, arr->dimensions, arr->sizes, 0, 0, arr->dimensions + 1);
+        break;
+    }
+    return OK;
+}
+
+
+static inline int32_t
+arrprint_(CSOUND *csound, ARRAYDAT *arr, const char* fmt, const char* label) {
+    char *typename = arr->arrayType->varTypeName;
+    switch(typename[0]) {
+    case 'i':
+    case 'k':
+        return arrprint(csound, arr, fmt, label);
+    case 'S':
+        return arrprint_str(csound, arr, fmt, label);
+    }
+    return INITERRF(Str("type not supported for printing: %s"), typename);
+}
+
+static int32_t
+arrayprint_perf(CSOUND *csound, ARRAYPRINTK *p) {
+    int32_t trig = (int32_t)*p->trig;
+    int32_t ret = OK;
+    if(trig < 0 || (trig>0 && p->lasttrig<=0)) {
+        ret = arrprint_(csound, p->in, p->printfmt, p->label);
+    }
+    p->lasttrig = trig;
+    return ret;
+}
+
+static int32_t
+arrayprint_perf_notrig(CSOUND *csound, ARRAYPRINT *p) {
+    return arrprint_(csound, p->in, p->printfmt, p->label);
+}
+
+static int32_t
+arrayprint_i(CSOUND *csound, ARRAYPRINT *p) {
+    const char *label = p->Slabel != NULL ? p->Slabel->data : NULL;
+    return arrprint(csound, p->in, default_printfmt, label);
+}
+
+static int32_t
+arrayprintf_i(CSOUND *csound, ARRAYPRINT *p) {
+    char tmpfmt[256];
+    const char *fmt;
+    if(strlen(p->Sfmt->data) == 0) {
+
+        fmt = default_printfmt;
+    } else {
+        if(strstr(p->Sfmt->data, "%d") == NULL) {
+            fmt = p->Sfmt->data;
+        } else {
+            str_replace(tmpfmt, p->Sfmt->data, "%d", "%.0f");
+            fmt = tmpfmt;
+        }
+    }
+    const char *label = p->Slabel != NULL ? p->Slabel->data : NULL;
+    return arrprint(csound, p->in, fmt, label);
+}
+
+
+/*
+
+ftprint  - print the contents of a table (useful for debugging)
+
+ftprint ifn, ktrig=1, kstart=0, kend=0, kstep=1, inumcols=0
+
+ifn: the table to print
+ktrig: table will be printed whenever this changes from non-positive
+       to positive and is different to last trigger
+kstart: start index
+kend: end index (non inclusive)
+kstep: number of elements to skip
+inumcols: number of elements to print per line
+
+See also: printarray
+
+*/
+
+typedef struct {
+    OPDS h;
+    MYFLT *ifn, *ktrig, *kstart, *kend, *kstep, *inumcols;
+    int32_t lasttrig;
+    int32_t numcols;
+    FUNC *ftp;
+} FTPRINT;
+
+static int32_t ftprint_perf(CSOUND *csound, FTPRINT *p);
+
+static int32_t
+ftprint_init(CSOUND *csound, FTPRINT *p) {
+    p->lasttrig = 0;
+    p->numcols = (int32_t)*p->inumcols;
+    if(p->numcols == 0)
+        p->numcols = 10;
+    p->ftp = csound->FTFind(csound, p->ifn);
+    int32_t trig = (int32_t)*p->ktrig;
+
+    if (trig > 0) {
+        ftprint_perf(csound, p);
+    }
+    return OK;
+}
+
+/** allow negative indices to count from the end
+ */
+static int32_t handle_negative_idx(uint32_t *out, int32_t idx, uint32_t length) {
+    if(idx >= 0) {
+        *out = (uint32_t) idx;
+        return OK;
+    }
+    int64_t res = (int64_t)length + idx + 1;
+    if(res < 0) {
+        return NOTOK;
+    }
+    *out = (uint32_t) res;
+    return NOTOK;
+}
+
+static int32_t
+ftprint_perf(CSOUND *csound, FTPRINT *p) {
+    int32_t trig = (int32_t)*p->ktrig;
+    if(trig == 0) {
+      p->lasttrig = 0;
+      return OK;
+    }
+    if(trig > 0 && p->lasttrig > 0)
+        return OK;
+    p->lasttrig = trig;
+    FUNC *ftp = p->ftp;
+    const MYFLT *ftable = ftp->ftable;
+    const uint32_t ftplen = ftp->flen;
+    const uint32_t numcols = (uint32_t)p->numcols;
+    const uint32_t step = (uint32_t)*p->kstep;
+    uint32_t end, start;
+    int32_t error = handle_negative_idx(&start, (int32_t)*p->kstart, ftplen);
+    if(error)
+        return PERFERRF(Str("Could not handle start index: %d"),
+                        (int32_t)*p->kstart);
+    int32_t _end = (int32_t)*p->kend;
+    if(_end == 0)
+        end = ftplen;
+    else {
+        error = handle_negative_idx(&end, _end, ftplen);
+        if(error)
+            return PERFERRF(Str("Could not handle end index: %d"), _end);
+    }
+    const char *fmt = default_printfmt;
+    char currline[ARRPRINT_MAXLINE];
+    uint32_t i,
+             elemsprinted = 0,
+             charswritten = 0,
+             startidx = start;
+    csound->MessageS(csound, CSOUNDMSG_ORCH,
+                     "ftable %d:\n", (int32_t)*p->ifn);
+    for(i=start; i < end; i+=step) {
+        charswritten += snprintf(currline+charswritten, ARRPRINT_MAXLINE - charswritten, fmt, ftable[i]);
+        elemsprinted++;
+        if(elemsprinted < numcols) {
+            currline[charswritten++] = ' ';
+        } else {
+            currline[charswritten++] = '\0';
+            csound->MessageS(csound, CSOUNDMSG_ORCH,
+                             " %3d: %s\n", startidx, currline);
+            startidx = i+step;
+            elemsprinted = 0;
+            charswritten = 0;
+        }
+    }
+    if(charswritten > 0) {
+        currline[charswritten] = '\0';
+        csound->MessageS(csound, CSOUNDMSG_ORCH,
+                         " %3d: %s\n", startidx, currline);
+    }
+    return OK;
+}
+
+
+/*
+  bit | and & for array
+
+*/
+
+typedef struct {
+    OPDS h;
+    ARRAYDAT *out;
+    ARRAYDAT *in1, *in2;
+} BINOP_AAA;
+
+static int32_t
+array_binop_prepare(CSOUND *csound, BINOP_AAA *p, int32_t init,
+                    int32_t *numitems) {
+    size_t count1, count2;
+    if (UNLIKELY(p->in1->dimensions <= 0 || p->in2->dimensions <= 0 ||
+                 p->out->dimensions > 1 ||
+                 csound_array_member_count(p->in1, &count1) != OK ||
+                 csound_array_member_count(p->in2, &count2) != OK ||
+                 count1 > INT32_MAX || count2 > INT32_MAX))
+        return INITPERFERR(init, Str("array bitwise: invalid array size"));
+    if (UNLIKELY(count1 != count2))
+        return INITPERFERR(init, Str("array bitwise: operand lengths do not match"));
+    /* Keep the existing flat output, using the current input lengths. */
+    *numitems = (int32_t)count1;
+    if (init) {
+        if (UNLIKELY(tabinit(csound, p->out, *numitems,
+                             p->h.insdshead) != OK))
+            return csound_array_init_resize_error(csound);
+        return OK;
+    }
+    return tabcheck(csound, p->out, *numitems, &p->h);
+}
+
+static int32_t
+array_binop_init(CSOUND *csound, BINOP_AAA *p) {
+    int32_t numitems;
+    return array_binop_prepare(csound, p, 1, &numitems);
+}
+
+static int32_t
+array_or(CSOUND *csound, BINOP_AAA *p) {
+    int32_t numitems;
+    if (UNLIKELY(array_binop_prepare(csound, p, 0, &numitems) != OK))
+        return NOTOK;
+    int32_t i;
+    MYFLT *out = p->out->data;
+    MYFLT *in1 = p->in1->data;
+    MYFLT *in2 = p->in2->data;
+
+    for(i=0; i<numitems; i++) {
+        *(out++) = (MYFLT)((int32_t)*(in1++) | (int32_t)*(in2++));
+    }
+    return OK;
+}
+
+static int32_t
+array_and(CSOUND *csound, BINOP_AAA *p) {
+    int32_t numitems;
+    if (UNLIKELY(array_binop_prepare(csound, p, 0, &numitems) != OK))
+        return NOTOK;
+    int32_t i;
+    MYFLT *out = p->out->data;
+    MYFLT *in1 = p->in1->data;
+    MYFLT *in2 = p->in2->data;
+
+    for(i=0; i<numitems; i++) {
+        *(out++) = (MYFLT)((int32_t)*(in1++) & (int32_t)*(in2++));
+    }
+    return OK;
+}
+
+
+typedef struct {
+    OPDS h;
+    MYFLT *iout, *ifn;
+    // FUNC *ftp;
+} FTEXISTS;
+
+static int32_t
+ftexists_init(CSOUND *csound, FTEXISTS *p) {
+    double number = (double)*p->ifn;
+    *p->iout = FL(0.0);
+    if (number > -2.0 && number < (double)INT32_MAX + 1.0) {
+        int32_t ifn = (int32_t)number;
+        MYFLT *args;
+        /* Preserve FTFind's built-in sine aliases, 0 and -1. */
+        if (ifn <= 0) {
+            *p->iout = FL(1.0);
+            return OK;
+        }
+        /* Query metadata without reporting errors or loading deferred GEN01 data.
+           A table can exist with an empty argument list, for example after ftload. */
+        *p->iout = csoundGetTableArgs(csound, &args, ifn) >= 0;
+    }
+    return OK;
+}
+
+/*
+
+ lastcycle: 1 if this is the last performance cycle for this event
+
+ kislast lastcycle
+
+ if lastcycle() then
+ ; do something
+ endif
+
+*/
+
+typedef struct {
+    OPDS h;
+    MYFLT *out;
+    INSDS *owner;
+    int32_t fired;
+} LASTCYCLE;
+
+static int32_t
+lastcycle_init(CSOUND *csound, LASTCYCLE *p) {
+    IGN(csound);
+    /* UDOs keep an init-time copy of their caller's off time. The outer
+       instrument owns the scheduled end time, including later changes. */
+    p->owner = p->h.insdshead;
+    while (p->owner->opcod_iobufs != NULL)
+        p->owner = ((OPCOD_IOBUFS *)p->owner->opcod_iobufs)->parent_ip;
+    *p->out = FL(0.0);
+    p->fired = 0;
+    return OK;
+}
+
+static int32_t
+lastcycle(CSOUND *csound, LASTCYCLE *p) {
+    IGN(csound);
+    *p->out = FL(0.0);
+    if (!p->fired && p->owner->offtim >= 0.0 &&
+        (p->owner->relesing || p->owner->xtratim == 0)) {
+        /* With an explicit release, off time becomes the final end time only
+           after the engine enters release. Account for a partial final block
+           before converting that time to the opcode's local cycle count. */
+        double endtime = p->owner->offtim -
+                         p->owner->no_end / (double)p->owner->esr;
+        double endsample = floor(endtime * (double)CS_ESR + 0.5);
+        double endcycle = ceil(endsample / CS_KSMPS);
+        if ((double)CS_KCNT >= endcycle) {
+            *p->out = FL(1.0);
+            p->fired = 1;
+        }
+    }
+    return OK;
+}
+
+
+/**
+ * strstrip
+ *
+ * remove whitespace from left, right or both sides
+ *
+ * Sout strstrip Sin
+ * Sout strstrip Sin, "l"
+ * Sout strstrip Sin, "r"
+ *
+ */
+
+// Make sure that the output string has enough allocated space.
+// This can run only at init time.
+static int32_t string_ensure(CSOUND *csound, STRINGDAT *s, size_t size) {
+    if (s->size >= size)
+        return OK;
+
+    char *data = csound->ReAlloc(csound, s->data, size);
+    if (UNLIKELY(data == NULL))
+        return INITERR(Str("memory allocation failure"));
+
+    s->data = data;
+    s->size = size;
+    return OK;
+}
+
+static int32_t string_copy(CSOUND *csound, STRINGDAT *out,
+                           const char *src, size_t size) {
+    int32_t result = string_ensure(csound, out, size + 1);
+    if (UNLIKELY(result != OK))
+        return result;
+
+    memmove(out->data, src, size);
+    out->data[size] = '\0';
+    return OK;
+}
+
+typedef struct {
+    OPDS h;
+    STRINGDAT *out;
+    STRINGDAT *in;
+    STRINGDAT *which;
+} STR1_1;
+
+static int32_t
+stripl(CSOUND *csound, STR1_1 *p) {
+    const char *str = p->in->data;
+    while (isspace((unsigned char)*str))
+        str++;
+    return string_copy(csound, p->out, str, strlen(str));
+}
+
+static int32_t
+stripr(CSOUND *csound, STR1_1 *p) {
+    const char *str = p->in->data;
+    size_t size = strlen(str);
+    while (size > 0 && isspace((unsigned char)str[size - 1]))
+        size--;
+    return string_copy(csound, p->out, str, size);
+}
+
+static int32_t
+stripside(CSOUND *csound, STR1_1 *p) {
+    if(p->which->size < 2)
+        return INITERR("which should not be empty");
+    char which = p->which->data[0];
+    if(which == 'l')
+        return stripl(csound, p);
+    else if (which == 'r')
+        return stripr(csound, p);
+    return INITERRF("which should be one of 'l' or 'r', got %s", p->which->data);
+}
+
+// Return the trimmed length and set the first non-space byte offset.
+static size_t str_find_edges(const char *str, size_t *startidx) {
+    size_t idx0 = 0;
+    while(isspace((unsigned char)*str)) {
+        str++;
+        idx0++;
+    }
+
+    if(*str == 0) {
+        *startidx = idx0;
+        return 0;
+    }
+
+    size_t size = strlen(str);
+    while(size > 0 && isspace((unsigned char)str[size - 1])) {
+        size--;
+    }
+    *startidx = idx0;
+    return size;
+}
+
+
+static int32_t
+strstrip(CSOUND *csound, STR1_1 *p) {
+    size_t startidx;
+    size_t size = str_find_edges(p->in->data, &startidx);
+    return string_copy(csound, p->out, p->in->data + startidx, size);
+}
+
+
+/*
+ * println
+ *
+ * The same as printf but without a trigger
+ *
+ * println Sfmt, xvar1, [xvar2, ...]
+ *
+ * println "foo bar %s: %k,", Skey, kvalue
+ *
+ */
+
+
+typedef struct {
+    OPDS h;
+    STRINGDAT *sfmt;
+    MYFLT *args[64];
+    STRINGDAT buf;
+    AUXCH strseg;
+} PRINTLN;
+
+static int32_t printsk_init(CSOUND *csound, PRINTLN *p)
+{
+    IGN(csound);
+    IGN(p);
+    return OK;
+}
+
+static int32_t printsk_deinit(CSOUND *csound, PRINTLN *p)
+{
+    csound->Free(csound, p->buf.data);
+    p->buf.data = NULL;
+    p->buf.size = 0;
+    return OK;
+}
+
+#define IS_AUDIO_ARG(x) (!strcmp("a", GetTypeForArg(x)->varTypeName))
+#define IS_STRING_ARG(x) (!strcmp("S", GetTypeForArg(x)->varTypeName))
+
+/* Adapted from OOps/str_ops.c for the plugin API, with reusable buffers. */
+static int32_t
+sprintf_opcode_(CSOUND *csound, PRINTLN *p)
+{
+  STRINGDAT *str = &p->buf;
+  const char *fmt = p->sfmt->data;
+  MYFLT **kvals = p->args;
+  int32_t numVals = (int32_t)p->INOCOUNT - 1;
+  size_t len = 0, i = 0, maxChars;
+  int32_t j = 0, n;
+  const char *segwaiting = NULL, *error = NULL;
+  char *strseg;
+  MYFLT *parm;
+
+  if (UNLIKELY(((OPDS*)p)->optext->t.inArgCount > 31))
+    return PERFERR(Str("too many arguments"));
+  for (j = 0; j < numVals; j++) {
+    if (UNLIKELY(IS_AUDIO_ARG(kvals[j])))
+      return PERFERR(Str("a-rate argument not allowed"));
+  }
+  j = 0;
+
+  /* Preserve literal copying when there are no format arguments. */
+  size_t initialSize = numVals == 0 ? strlen(fmt) + 1 : 64;
+  if (str->data == NULL || str->size < initialSize) {
+    char *data = csound->ReAlloc(csound, str->data, initialSize);
+    if (UNLIKELY(data == NULL))
+      return PERFERR(Str("memory allocation failure"));
+    str->data = data;
+    str->size = initialSize;
+  }
+  if (numVals == 0) {
+    strcpy(str->data, fmt);
+    return OK;
+  }
+
+  /* A segment is never longer than the original format string. */
+  size_t segmentSize = strlen(fmt) + 1;
+  if (p->strseg.size < segmentSize) {
+    csound->AuxAlloc(csound, segmentSize, &p->strseg);
+  }
+  strseg = p->strseg.auxp;
+  while (1) {
+    if (*fmt != '%' && *fmt != '\0') {
+      strseg[i++] = *fmt++;
+      continue;
+    }
+    if (fmt[0] == '%' && fmt[1] == '%') {
+      strseg[i++] = *fmt++;
+      strseg[i++] = *fmt++;
+      continue;
+    }
+
+    if (segwaiting != NULL) {
+      strseg[i] = '\0';
+      if (UNLIKELY(numVals <= 0)) {
+        error = Str("insufficient arguments for format");
+        goto fail;
+      }
+      numVals--;
+      parm = kvals[j++];
+      if (UNLIKELY(IS_STRING_ARG(parm) != (*segwaiting == 's'))) {
+        error = Str("argument type inconsistent with format");
+        goto fail;
+      }
+      while (1) {
+        maxChars = str->size - len;
+        switch (*segwaiting) {
+        case 'd': case 'i': case 'c':
+          n = snprintf(str->data + len, maxChars, strseg,
+                       (int)MYFLT2LRND(*parm));
+          break;
+        case 'o': case 'x': case 'X': case 'u':
+          n = snprintf(str->data + len, maxChars, strseg,
+                       (unsigned int)MYFLT2LRND(*parm));
+          break;
+        case 'e': case 'E': case 'f': case 'F': case 'g': case 'G':
+          n = snprintf(str->data + len, maxChars, strseg, (double)*parm);
+          break;
+        case 's':
+          n = snprintf(str->data + len, maxChars, strseg,
+                       ((STRINGDAT*)parm)->data);
+          break;
+        default:
+          error = Str("invalid format string");
+          goto fail;
+        }
+        if (UNLIKELY(n < 0)) {
+          error = Str("formatting failed");
+          goto fail;
+        }
+        if ((size_t)n < maxChars)
+          break;
+        if (UNLIKELY((size_t)n >= MAX_STRINGDAT_SIZE - len)) {
+          error = Str("formatted string is too long");
+          goto fail;
+        }
+        size_t size = len + (size_t)n + 1;
+        char *data = csound->ReAlloc(csound, str->data, size);
+        if (UNLIKELY(data == NULL)) {
+          error = Str("memory allocation failure");
+          goto fail;
+        }
+        str->data = data;
+        str->size = size;
+        /* Retry this segment; snprintf's return value includes unwritten text. */
+      }
+      len += (size_t)n;
+      i = 0;
+    }
+
+    if (*fmt == '\0')
+      break;
+    strseg[i++] = *fmt++;
+    segwaiting = fmt;
+    /* Only fixed widths/precisions are supported. Reject '*' and positional
+       arguments rather than passing a mismatched argument list to snprintf. */
+    while (*segwaiting != '\0' &&
+           strchr("-+ #0.123456789", *segwaiting) != NULL)
+      segwaiting++;
+    if (*segwaiting == '\0' ||
+        strchr("diouxXeEfFgGcs", *segwaiting) == NULL) {
+      error = Str("invalid format string");
+      goto fail;
+    }
+  }
+  if (UNLIKELY(numVals > 0)) {
+    error = Str("too many arguments for format");
+    goto fail;
+  }
+  return OK;
+
+ fail:
+  return PERFERR(error);
+}
+
+
+static int32_t println_perf(CSOUND *csound, PRINTLN *p)
+{
+    int32_t err = sprintf_opcode_(csound, p);
+    if (err != OK)
+        return err;
+    csound->MessageS(csound, CSOUNDMSG_ORCH, "%s\n", p->buf.data);
+    return OK;
+}
+
+static int32_t printsk_perf(CSOUND *csound, PRINTLN *p)
+{
+    int32_t err = sprintf_opcode_(csound, p);
+    if (err != OK)
+        return err;
+    csound->MessageS(csound, CSOUNDMSG_ORCH, "%s", p->buf.data);
+    return OK;
+}
+
+/*
+
+   Input types:
+
+ - a, k, s, i, w, f,
+ - o (optional i-rate, default to 0), O optional krate=0
+ - p (opt, default to 1), P optional krate=1
+ - q (opt, 10),
+ - v(opt, 0.5),
+ - j(opt, ?1), J optional krate=-1
+ - h(opt, 127),
+ - y (multiple inputs, a-type),
+ - z (multiple inputs, k-type),
+ - Z (multiple inputs, alternating k- and a-types),
+ - m (multiple inputs, i-type),
+ - M (multiple inputs, any type)
+ - n (multiple inputs, odd number of inputs, i-type).
+ - . anytype
+ - ? optional
+ - * any type, any number of inputs
+ */
+
+#define S(x) sizeof(x)
+
+static OENTRY emugens_localops[] = {
+    { "linlin", S(LINLIN1), 0, "k", "kkkkk", NULL, (SUBR)linlin1_perf },
+    { "linlin", S(LINLIN1), 0,  "k", "kkkop", NULL, (SUBR)linlin1_perf },
+    { "linlin", S(LINLIN1), 0,  "i", "iiiop", (SUBR)linlin1_perf},
+    { "linlin", S(LINLINARR1), 0,  "k[]", "k[]kkOP", (SUBR)linlinarr1_init,
+      (SUBR)linlinarr1_perf},
+    { "linlin", S(LINLINARR1), 0,  "i[]", "i[]iiop", (SUBR)linlinarr1_i},
+    { "linlin", S(BLENDARRAY), 0,  "k[]", "kk[]k[]OP",
+      (SUBR)blendarray_init, (SUBR)blendarray_perf},
+    { "linlin", S(BLENDARRAY), 0,  "i[]", "ii[]i[]op", (SUBR)blendarray_i},
+    { "lincos", S(LINLIN1), 0,  "k", "kkkOP", NULL, (SUBR)lincos_perf },
+    { "lincos", S(LINLIN1), 0,  "i", "iiiop", (SUBR)lincos_perf },
+
+    { "xyscale", S(XYSCALE), 0,  "k", "kkkkkk", NULL, (SUBR)xyscale },
+    { "xyscale", S(XYSCALE), 0,  "k", "kkiiii", (SUBR)xyscalei_init,
+        (SUBR)xyscalei },
+
+    { "mtof", S(PITCHCONV), 0,  "k", "k", (SUBR)mtof_init, (SUBR)mtof },
+    { "mtof", S(PITCHCONV), 0,  "i", "i", (SUBR)mtof_init },
+    { "mtof", S(PITCHCONV_ARR), 0,  "k[]", "k[]",
+      (SUBR)mtof_arr_init, (SUBR)mtof_arr },
+    { "mtof", S(PITCHCONV_ARR), 0,  "i[]", "i[]", (SUBR)mtof_arr_init },
+
+    { "ftom", S(PITCHCONV), 0,   "k", "ko", (SUBR)ftom_init, (SUBR)ftom},
+    { "ftom", S(PITCHCONV), 0,   "i", "io", (SUBR)ftom_init},
+    { "ftom", S(PITCHCONV_ARR), 0,   "k[]", "k[]o",
+      (SUBR)ftom_arr_init, (SUBR)ftom_arr},
+    { "ftom", S(PITCHCONV_ARR), 0,   "i[]", "i[]o",
+      (SUBR)ftom_arr_init, (SUBR)ftom_arr},
+
+
+    { "pchtom", S(PITCHCONV), 0,  "i", "i", (SUBR)pchtom },
+    { "pchtom", S(PITCHCONV), 0,  "k", "k", NULL, (SUBR)pchtom },
+
+    { "bpf.k_kM", S(BPFX), 0,  "k", "kM", (SUBR)bpfx_init, (SUBR)bpfx_k },
+    { "bpfcos.k_kM", S(BPFX), 0,  "k", "kM", (SUBR)bpfx_init, (SUBR)bpfxcos_k },
+
+    { "bpf.i_im", S(BPFX), 0,  "i", "im", (SUBR)bpfx_i },
+    { "bpfcos.i_im", S(BPFX), 0,  "i", "im", (SUBR)bpfxcos_i },
+
+    { "bpf.K_KM", S(BPF_K_Km), 0,  "k[]", "k[]M", (SUBR)bpf_K_Km_init, (SUBR)bpf_K_Km_kr },
+    { "bpfcos.K_KM", S(BPF_K_Km), 0,  "k[]", "k[]M", (SUBR)bpf_K_Km_init, (SUBR)bpfcos_K_Km_kr },
+
+    { "bpf.a_aM", S(BPF_a_am), 0,  "a", "aM", (SUBR)bpf_a_am_init, (SUBR)bpf_a_am_kr },
+    { "bpfcos.a_aM", S(BPF_a_am), 0,  "a", "aM", (SUBR)bpf_a_am_init, (SUBR)bpfcos_a_am_kr },
+
+    { "bpf.k_kKK", S(BPF_k_kKK), 0,  "k", "kk[]k[]", (SUBR)bpf_k_kKK_init, (SUBR)bpf_k_kKK_kr },
+    { "bpfcos.k_kKK", S(BPF_k_kKK), 0,  "k", "kk[]k[]", (SUBR)bpf_k_kKK_init, (SUBR)bpfcos_k_kKK_kr },
+
+    { "bpf.k_kII", S(BPF_k_kKK), 0,  "k", "ki[]i[]", (SUBR)bpf_k_kKK_init, (SUBR)bpf_k_kKK_kr },
+    { "bpfcos.k_kII", S(BPF_k_kKK), 0,  "k", "ki[]i[]", (SUBR)bpf_k_kKK_init, (SUBR)bpfcos_k_kKK_kr },
+
+    { "bpf.a_aKK", S(BPF_k_kKK), 0,  "a", "ak[]k[]", (SUBR)bpf_k_kKK_init, (SUBR)bpf_a_aKK_kr },
+    { "bpfcos.a_aKK", S(BPF_k_kKK), 0,  "a", "ak[]k[]", (SUBR)bpf_k_kKK_init, (SUBR)bpfcos_a_aKK_kr },
+
+    { "bpf.a_aII", S(BPF_k_kKK), 0,  "a", "ai[]i[]", (SUBR)bpf_k_kKK_init, (SUBR)bpf_a_aKK_kr },
+    { "bpfcos.a_aII", S(BPF_k_kKK), 0,  "a", "ai[]i[]", (SUBR)bpf_k_kKK_init, (SUBR)bpfcos_a_aKK_kr },
+
+    { "bpf.i_iII", S(BPF_k_kKK), 0,  "i", "ii[]i[]", (SUBR)bpf_k_kKK_ir },
+    { "bpfcos.i_iII", S(BPF_k_kKK), 0,  "i", "ii[]i[]", (SUBR)bpfcos_k_kKK_ir },
+
+    { "bpf.kk_kKKK", S(BPF_kk_kKKK), 0,  "kk", "kk[]k[]k[]", (SUBR)bpf_kk_kKKK_init, (SUBR)bpf_kk_kKKK_kr },
+    // TODO
+
+    { "bpf.kk_kIII", S(BPF_kk_kKKK), 0,  "kk", "ki[]i[]i[]", (SUBR)bpf_kk_kKKK_init, (SUBR)bpf_kk_kKKK_kr },
+    // TODO
+
+    { "bpf.ii_iIII", S(BPF_kk_kKKK), 0,  "ii", "ii[]i[]i[]", (SUBR)bpf_kk_kKKK_ir },
+    // TODO
+
+
+    { "ntom.i", S(NTOM), 0,  "i", "S", (SUBR)ntom },
+    { "ntom.k", S(NTOM), 0,  "k", "S", (SUBR)ntom, (SUBR)ntom },
+
+    { "mton.i", S(MTON), 0,  "S", "i", (SUBR)mton_init },
+    { "mton.k", S(MTON), 0,  "S", "k", (SUBR)mton_init, (SUBR)mton },
+
+    { "ntof.i", S(NTOM), 0,  "i", "S", (SUBR)ntof },
+    { "ntof.k", S(NTOM), 0,  "k", "S", (SUBR)ntof, (SUBR)ntof },
+
+    { "cmp", S(Cmp), 0,  "a", "aSa", (SUBR)cmp_init, (SUBR)cmp_aa,},
+    { "cmp", S(Cmp), 0,  "a", "aSk", (SUBR)cmp_init, (SUBR)cmp_ak },
+    { "cmp", S(Cmp_array1), 0,  "k[]", "k[]Sk",
+      (SUBR)cmparray1_init, (SUBR)cmparray1_k },
+    { "cmp", S(Cmp_array1), 0,  "i[]", "i[]Si", (SUBR)cmparray1_i },
+
+    { "cmp", S(Cmp_array2), 0,  "k[]", "k[]Sk[]",
+      (SUBR)cmparray2_init, (SUBR)cmparray2_k },
+    { "cmp", S(Cmp_array2), 0,  "i[]", "i[]Si[]",
+      (SUBR)cmparray2_i },
+    { "cmp", S(Cmp2_array1), 0,  "k[]", "kSk[]Sk",
+      (SUBR)cmp2array1_init, (SUBR)cmp2array1_k },
+    { "cmp", S(Cmp2_array1), 0,  "i[]", "iSi[]Si", (SUBR)cmp2array1_i},
+
+
+    { "##or",  S(BINOP_AAA), 0,  "k[]", "k[]k[]",
+      (SUBR)array_binop_init, (SUBR)array_or},
+    { "##and", S(BINOP_AAA), 0,  "k[]", "k[]k[]",
+      (SUBR)array_binop_init, (SUBR)array_and},
+    { "reshapearray", S(ARRAYRESHAPE), 0,  "", ".[]im", (SUBR)arrayreshape},
+
+    { "ftslicei", S(TABSLICE), TB,  "", "iioop", (SUBR)tabslice_i },
+
+    { "ftslice.perf", S(TABSLICE),  TB,  "", "iiOOP",
+      (SUBR)tabslice_init, (SUBR)tabslice_k},
+
+    { "ftslice.onlyperf", S(TABSLICE),  TB,  "", "kkOOP",
+      NULL, (SUBR)tabslice_allk},
+
+    { "ftset.i", S(FTSET), TW,  "", "iioop", (SUBR)ftset_i },
+    { "ftset.k", S(FTSET), TW,  "", "kkOOP", (SUBR)ftset_init, (SUBR)ftset_k },
+
+    { "tab2array", S(TAB2ARRAY), TR,  "k[]", "iOOP",
+      (SUBR)tab2array_init, (SUBR)tab2array_k},
+    { "tab2array", S(TAB2ARRAY), TR,  "i[]", "ioop", (SUBR)tab2array_i},
+
+    { "printarray.i", S(ARRAYPRINT), 0,  "", "i[]", (SUBR)arrayprint_i},
+    { "print.i[]", S(ARRAYPRINT), 0,  "", "i[]", (SUBR)arrayprint_i},
+
+    { "printarray", S(ARRAYPRINTK), 0,  "", "k[]J",
+      (SUBR)arrayprint_init, (SUBR)arrayprint_perf},
+    { "print", S(ARRAYPRINTK), 0,  "", "k[]J",
+      (SUBR)arrayprint_init, (SUBR)arrayprint_perf},
+
+
+    { "printarray", S(ARRAYPRINTK), 0,  "", "k[]kS",
+      (SUBR)arrayprint_init, (SUBR)arrayprint_perf},
+    { "printarray.k_notrig", S(ARRAYPRINT), 0,  "", "k[]S",
+      (SUBR)arrayprint_init_notrig, (SUBR)arrayprint_perf_notrig},
+
+    { "printarray", S(ARRAYPRINTK), 0,  "", "k[]kSS",
+      (SUBR)arrayprint_init, (SUBR)arrayprint_perf},
+
+    { "printarray.k_notrig", S(ARRAYPRINT), 0,  "", "k[]SS",
+      (SUBR)arrayprint_init_notrig, (SUBR)arrayprint_perf_notrig},
+
+    { "printarray.fmt_i", S(ARRAYPRINT), 0,  "", "i[]S", (SUBR)arrayprintf_i},
+    { "printarray.fmt_label_i", S(ARRAYPRINT), 0,  "", "i[]SS",
+      (SUBR)arrayprintf_i},
+
+    { "printarray", S(ARRAYPRINTK), 0,  "", "S[]J",
+      (SUBR)arrayprint_init, (SUBR)arrayprint_perf},
+    { "print.k[]", S(ARRAYPRINTK), 0,  "", "S[]J",
+      (SUBR)arrayprint_init, (SUBR)arrayprint_perf},
+
+
+    { "printarray", S(ARRAYPRINTK), 0,  "", "S[]kS",
+      (SUBR)arrayprint_init, (SUBR)arrayprint_perf},
+
+    { "printarray", S(ARRAYPRINT), 0,  "", "S[]S",
+      (SUBR)arrayprint_init_notrig, (SUBR)arrayprint_perf_notrig},
+
+    { "printarray", S(ARRAYPRINT), 0,  "", "S[]SS",
+      (SUBR)arrayprint_init_notrig, (SUBR)arrayprint_perf_notrig},
+
+    { "ftprint", S(FTPRINT), TR,  "", "iPOOPo",
+      (SUBR)ftprint_init, (SUBR)ftprint_perf },
+
+    { "ftexists", S(FTEXISTS), TR,  "i", "i",
+      (SUBR)ftexists_init},
+    { "ftexists", S(FTEXISTS), TR,  "k", "k",
+      (SUBR)ftexists_init, (SUBR)ftexists_init},
+    { "lastcycle", S(LASTCYCLE), 0,  "k", "",
+      (SUBR)lastcycle_init, (SUBR)lastcycle},
+    { "strstrip.i_side", S(STR1_1), 0,  "S", "SS", (SUBR)stripside},
+    { "strstrip.i", S(STR1_1), 0,  "S", "S", (SUBR)strstrip},
+    { "println", S(PRINTLN), 0,  "", "SN",
+      (SUBR)printsk_init, (SUBR)println_perf, (SUBR)printsk_deinit},
+    { "printsk", S(PRINTLN), 0,  "", "SN",
+      (SUBR)printsk_init, (SUBR)printsk_perf, (SUBR)printsk_deinit}
+};
+
+LINKAGE_BUILTIN(emugens_localops)

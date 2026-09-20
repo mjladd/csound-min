@@ -1,0 +1,324 @@
+/*
+    prototyp.h:
+
+    Copyright (C) 1991-2005 Barry Vercoe, John ffitch
+
+    This file is part of Csound.
+
+    The Csound Library is free software; you can redistribute it
+    and/or modify it under the terms of the GNU Lesser General Public
+    License as published by the Free Software Foundation; either
+    version 2.1 of the License, or (at your option) any later version.
+
+    Csound is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public
+    License along with Csound; if not, write to the Free Software
+    Foundation, Inc., 31 Milk Street, #960789, Boston, MA, 02196, USA
+*/
+/*  PROTOTYP.H  */
+
+#if defined(__BUILDING_LIBCSOUND) && !defined(_CSOUND_PROTO_H)
+#define _CSOUND_PROTO_H
+#include <sysdep.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+  struct _alloc_data_;
+  void *csoundMalloc(CSOUND *, size_t);
+  void *csoundCalloc(CSOUND *, size_t);
+  void *csoundCallocAligned(CSOUND *, size_t, size_t);  
+  void *csoundRealloc(CSOUND *, void *, size_t);
+  void csoundFree(CSOUND *, void *);
+  void *csoundMalloc_debug(CSOUND *, size_t, char*, int32_t);
+  void *csoundCalloc_debug(CSOUND *, size_t, char*, int32_t);
+  void *csoundRealloc_debug(CSOUND *, void *, size_t, char*, int32_t);
+  void csoundFree_debug(CSOUND *, void *, char*, int32_t);
+  void csoundAuxAlloc(CSOUND *, size_t, AUXCH *);
+  void csoundAuxAllocAligned(CSOUND *, size_t, size_t, AUXCH *);
+  void auxchfree(CSOUND *, INSDS *);
+  int32_t csoundAuxAllocAsync(CSOUND *, size_t , AUXCH *,
+                         AUXASYNC *, aux_cb , void *);
+  void csoundFDRecord(CSOUND *, FDCH *);
+  void csoundFDClose(CSOUND *, FDCH *);
+  void fdchclose(CSOUND *, INSDS *);
+  char *csoundStrdup(CSOUND*, const char*);
+  char *cs_strndup(CSOUND*, const char*, size_t);
+  CS_PRINTF2  void synterr(CSOUND *, const char *, ...);
+  CS_NORETURN CS_PRINTF2  void csoundDie(CSOUND *, const char *, ...);
+  CS_PRINTF2  int32_t csoundInitError(CSOUND *, const char *, ...);
+  CS_PRINTF3  int32_t csoundPerfError(CSOUND *, OPDS *h, const char *, ...);
+  CS_PRINTF2  void csoundWarning(CSOUND *, const char *, ...);
+  CS_PRINTF2  void csoundDebugMsg(CSOUND *, const char *, ...);
+  CS_PRINTF2  void csoundErrorMsg(CSOUND *, const char *, ...);
+  void csoundErrorMsgS(CSOUND *, int32_t attr, const char *, ...);
+  void csoundErrMsgV(CSOUND *, const char *, const char *, va_list);
+  CS_NORETURN void csoundLongJmp(CSOUND *, int32_t retval);
+  TEXT *getoptxt(CSOUND *, int32_t *);
+  void  csoundInitDisplay(CSOUND *);
+  int32_t init0(CSOUND *);
+  void scsort(CSOUND *, FILE *, FILE *);
+  char *scsortstr(CSOUND *, CORFIL *);
+  int32_t scxtract(CSOUND *, CORFIL *, FILE *);
+  int32_t rdscor(CSOUND *, EVTBLK *);
+  int32_t start_engine(CSOUND *);
+  void list_opcodes(CSOUND *, int32_t);
+  char  *csoundGetStrFormat(int32_t format);
+  int32_t sndfileSampleSize(int32_t sf_format);
+  char *csoundType2String(int32_t type);
+  int32_t csoundType2CsfileType(int32_t type, int32_t encoding);
+  int32_t csoundSndfileType2CsfileType(int32_t type);
+  void  csoundRewriteHeader(CSOUND *csound, void *ofd);
+  int32_t read_options(CSOUND *, CORFIL *, int32_t);
+  int32_t argdecode(CSOUND *, int32_t, const char **);
+  void  remove_tmpfiles(CSOUND *);
+  void  add_tmpfile(CSOUND *, char *);
+  void  xturnoff(CSOUND *, INSDS *);
+  void  xturnoff_now(CSOUND *, INSDS *);
+  void  deinit_pass(CSOUND *, INSDS *);
+  INSDS *instance(CSOUND *, int32_t);
+  INSDS *allocate_or_take_instance(CSOUND *, INSTRTXT *, int32_t);
+  void recycle_inactive_instance(CSOUND *, INSDS *);
+  int32_t instance_has_async_refs(const INSDS *);
+  int32_t instance_is_reclaimable(const INSDS *);
+  typedef enum {
+    INSTANCE_INIT_DEFERRED = 0,
+    INSTANCE_INIT_COMPLETE,
+    INSTANCE_INIT_TURNOFF
+  } INSTANCE_INIT_RESULT;
+  typedef enum {
+    INSTANCE_TURNOFF_NONE = 0,
+    INSTANCE_TURNOFF_REQUESTED,
+    INSTANCE_TURNOFF_FINALIZING,
+    INSTANCE_TURNOFF_RECLAIM
+  } INSTANCE_TURNOFF_STATE;
+  int32_t instance_init_begin(CSOUND *, INSDS *);
+  INSTANCE_INIT_RESULT instance_init_finish(CSOUND *, INSDS *);
+  void instance_init_request_turnoff(CSOUND *, INSDS *);
+  void instance_process_pending_turnoffs(CSOUND *);
+  INSDS *create_instance(CSOUND *csound, int32_t insno);
+  void free_instance(CSOUND *csound, INSDS *ip);
+  int32_t instr_num(CSOUND *csound, INSTRTXT *instr);
+  void free_instr_var_memory(CSOUND* csound, INSDS* ip);
+  void recycle_udo_instance(CSOUND* csound, INSDS* ip);
+  int32_t init_instance(CSOUND *csound, INSDS *ip, EVTBLK *newevtp);
+  int32_t instr_context_check(CSOUND *csound, INSDS *ip, INSDS *insdshead);
+  int32_t alloc_queue_enqueue(CSOUND *csound,
+                              const struct _alloc_data_ *data);
+  int32_t alloc_queue_has_pending(CSOUND *csound);
+  int32_t alloc_queue_lock_init(CSOUND *csound);
+  void alloc_queue_lock_destroy(CSOUND *csound);
+  int32_t realtime_spin_lock_init(spin_lock_t *);
+  void realtime_spin_lock_destroy(spin_lock_t *);
+  void async_instance_lock(CSOUND *csound);
+  void async_instance_unlock(CSOUND *csound);
+  void csound_rt_event_lock(CSOUND *csound);
+  void csound_rt_event_unlock(CSOUND *csound);
+  void csound_recycle_rt_event_list(CSOUND *csound, EVTNODE *events);
+  void csound_recycle_rt_event_list_with_tail(CSOUND *csound,
+                                              EVTNODE *events,
+                                              EVTNODE *tail);
+  int32_t diskin2_async_setup(CSOUND *csound);
+  void diskin2_async_drain_deferred(CSOUND *csound);
+  void diskin2_async_prepare_shutdown(CSOUND *csound);
+  void diskin2_async_shutdown(CSOUND *csound);
+  int32_t insert_midi_event(CSOUND *, int32_t,  MCHNBLK*, MEVENT*);
+  int32_t insert_event(CSOUND *, int32_t,  EVTBLK*);
+  void free_inactive_instances(CSOUND*);
+  void beat_expire(CSOUND *, double);
+  void time_expire(CSOUND *, double);
+  int32_t insert_event_at_sample(CSOUND *, const EVTBLK *, const MYFLT *, int64_t);
+  MEMFIL *csoundLoadMemoryfile(CSOUND *csound, const char *filnam, int32_t csFileType,
+                               int32_t (*callback)(CSOUND*, MEMFIL*));
+  void    free_memfiles(CSOUND *);
+  int32_t  delete_memfile(CSOUND *, const char *);
+  char    *csoundTmpFileName(CSOUND *, const char *);
+  void    *SAsndgetset(CSOUND *, char *, void *, MYFLT *, MYFLT *, MYFLT *, int32_t);
+  int32_t getsndin(CSOUND *, void *, MYFLT *, int32_t, void *);
+  void    *sndgetset(CSOUND *, void *);
+  void    dbfs_init(CSOUND *, MYFLT dbfs);
+  int32_t csoundLoadExternals(CSOUND *);
+  SNDMEMFILE *csoundLoadSoundFile(CSOUND *, const char *name, void *sfinfo);
+  int32_t csoundPVOCEX_LoadFile(CSOUND *, const char *fname, PVOCEX_MEMFILE *p);
+  void    print_opcodedir_warning(CSOUND *);
+  int32_t check_rtaudio_name(char *fName, char **devName, int32_t isOutput);
+  int32_t csoundLoadOpcodeDB(CSOUND *, const char *);
+  void    csoundDestroyOpcodeDB(CSOUND *);
+  int32_t csoundCheckOpcodePluginFile(CSOUND *, const char *);
+  int32_t csoundLoadAndInitModule(CSOUND *, const char *);
+  void    csoundNotifyFileOpened(CSOUND *, const char *, int32_t, int32_t, int32_t);
+  char *csoundGetArgString(CSOUND *, MYFLT);
+  void    linevent_open(CSOUND *);
+  void    linevent_close(CSOUND *);
+  void    sf_open_in(CSOUND *);
+  void sf_open_out(CSOUND*);
+  void sf_open_nosound(CSOUND*);
+  void    set_io_backend(CSOUND *);
+  void sf_close_in(CSOUND*);
+  void sf_close_out(CSOUND*);
+  void    midi_open(CSOUND *);
+  void    midi_open_out(CSOUND *);
+  void    midi_close(CSOUND *);
+  void    m_chn_init_all(CSOUND *);
+  void    print_csound_version(CSOUND*);
+  int32_t realtset(CSOUND *, SRTBLK *);
+  MYFLT   realt(CSOUND *, MYFLT);
+  uintptr_t event_insert_thread(void *);
+  int32_t sens_midi(CSOUND *);
+  void sort(CSOUND*);
+  void twarp(CSOUND*);
+  void add_csobj(CSOUND *csound, TYPE_POOL* pool);
+
+/**
+ * Register a function to be called by csoundReset(), in reverse order
+ * of registration, before unloading external modules. The function takes
+ * the Csound instance pointer as the first argument, and the pointer
+ * passed here as 'userData' as the second, and is expected to return zero
+ * on success.
+ * The return value of csoundRegisterResetCallback() is zero on success.
+ */
+int32_t csoundRegisterResetCallback(CSOUND *, void *userData,
+                                int32_t (*func)(CSOUND *, void *));
+
+/**
+ * Returns the name of the opcode of which the data structure
+ * is pointed to by 'p'.
+ */
+char *csoundGetOpcodeName(void *p);
+
+/**
+ * Returns the number of input arguments for opcode 'p'.
+ */
+int32_t csoundGetInputArgCnt(void *p);
+
+
+/** Returns the CS_TYPE for an opcode's arg pointer */
+
+CS_TYPE* csoundGetTypeForArg(void* argPtr);
+
+/**
+ * Returns a binary value of which bit 0 is set if the first input
+ * argument is a string, bit 1 is set if the second input argument is
+ * a string, and so on.
+ * Only the first 31 arguments are guaranteed to be reported correctly.
+ */
+unsigned long csoundGetInputArgSMask(void *p);
+
+/**
+ * Returns the name of input argument 'n' (counting from 0) for opcode 'p'.
+ */
+char *csoundGetInputArgName(void *p, int32_t n);
+
+/**
+ * Returns the number of output arguments for opcode 'p'.
+ */
+int32_t csoundGetOutputArgCnt(void *p);
+
+/**
+ * Returns a binary value of which bit 0 is set if the first output
+ * argument is a string, bit 1 is set if the second output argument is
+ * a string, and so on.
+ * Only the first 31 arguments are guaranteed to be reported correctly.
+ */
+unsigned long csoundGetOutputArgSMask(void *p);
+
+/**
+ * Returns the name of output argument 'n' (counting from 0) for opcode 'p'.
+ */
+char *csoundGetOutputArgName(void *p, int32_t n);
+
+/**
+ * Set release time in control periods (1 / csound->ekr second units)
+ * for opcode 'p' to 'n'. If the current release time is longer than
+ * the specified value, it is not changed.
+ * Returns the new release time.
+ */
+int32_t csoundSetReleaseLength(void *p, int32_t n);
+
+/**
+ * Set release time in seconds for opcode 'p' to 'n'.
+ * If the current release time is longer than the specified value,
+ * it is not changed.
+ * Returns the new release time in seconds.
+ */
+MYFLT csoundSetReleaseLengthSeconds(void *p, MYFLT n);
+
+
+
+/**
+ * Returns pointer to a string constant storing an error massage
+ * for error code 'errcode'.
+ */
+const char *csoundExternalMidiErrorString(CSOUND *, int32_t errcode);
+
+/**
+ * Appends a list of opcodes implemented by external software to Csound's
+ * internal opcode list. The list should either be terminated with an entry
+ * that has a NULL opname, or the number of entries (> 0) should be specified
+ * in 'n'.
+ * Returns zero on success.
+ */
+int32_t csoundAppendOpcodes(CSOUND *, const OENTRY *opcodeList, int32_t n);
+
+/**
+ * Prepends a list of opcodes to Csound's internal opcode list.
+ * Used for UDO redefinitions so new definitions are found first.
+ * Returns zero on success.
+ */
+int32_t csoundPrependOpcodes(CSOUND *, const OENTRY *opcodeList, int32_t n);
+
+
+/**
+ * Register utility with the specified name.
+ * Returns zero on success.
+ */
+int32_t csoundAddUtility(CSOUND *, const char *name,
+                     int32_t (*UtilFunc)(CSOUND *, int32_t, char **));
+
+/**
+ * Set description text for the specified utility.
+ * Returns zero on success.
+ */
+int32_t csoundSetUtilityDescription(CSOUND *, const char *utilName,
+                                const char *utilDesc);
+
+/**
+ * Remove all configuration variables of Csound instance 'csound',
+ * and free database. This function is called by csoundReset().
+ * Return value is CSOUNDCFG_SUCCESS in case of success.
+ */
+int32_t csoundDeleteAllConfigurationVariables(CSOUND *);
+
+#ifdef __cplusplus
+}
+#endif
+ 
+#ifdef __cplusplus
+extern "C" {
+#endif
+int64_t csoundSndfileWrite(CSOUND *csound, void *h, MYFLT *p, int64_t frames);
+int64_t csoundSndfileRead(CSOUND *csound, void *h, MYFLT *p, int64_t frames);
+int64_t csoundSndfileWriteSamples(CSOUND *csound, void *h, MYFLT *p,
+                                  int64_t samples);
+int64_t csoundSndfileReadSamples(CSOUND *csound, void *h, MYFLT *p,
+                                 int64_t samples);
+int64_t csoundSndfileSeek(CSOUND *csound, void *h, int64_t frames,
+                          int32_t whence);
+void *csoundSndfileOpen(CSOUND *csound, const char *path, int32_t mode,
+                        SFLIB_INFO *sfinfo);
+void *csoundSndfileOpenFd(CSOUND *csound, int32_t fd, int32_t mode,
+                          SFLIB_INFO *sfinfo, int32_t close_desc);
+int32_t csoundSndfileClose(CSOUND *csound, void *sndfile);
+int32_t csoundSndfileSetString(CSOUND *csound, void *sndfile, int32_t str_type,
+                               const char *str);
+const char *csoundSndfileStrError(CSOUND *csound, void *sndfile);
+int32_t csoundSndfileCommand(CSOUND *csound, void *handle, int32_t cmd,
+                             void *data, int32_t datasize);
+#ifdef __cplusplus
+}
+#endif
+
+#endif  /* __BUILDING_LIBCSOUND && !_CSOUND_PROTO_H */

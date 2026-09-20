@@ -1,0 +1,1718 @@
+/*
+  arrays.c: various array operations
+
+  Copyright (C) 2013-2025 Victor Lazzarini
+  This file is part of Csound.
+
+  The Csound Library is free software; you can redistribute it
+  and/or modify it under the terms of the GNU Lesser General Public
+  License as published by the Free Software Foundation; either
+  version 2.1 of the License, or (at your option) any later version.
+
+  Csound is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU Lesser General Public License for more details.
+
+  You should have received a copy of the GNU Lesser General Public
+  License along with Csound; if not, write to the Free Software
+  Foundation, Inc., 31 Milk Street, #960789, Boston, MA, 02196, USA
+*/
+
+#ifdef BUILD_PLUGINS
+#include "csdl.h"
+#else
+#include "csoundCore.h"
+#endif
+
+#include "interlocks.h"
+#include "arrays.h"
+#include "array_ops.h"  // for ARRAYINIT and array_init
+
+/*
+  transform operations
+*/
+
+typedef struct _autocorr {
+  OPDS h;
+  ARRAYDAT *out;
+  ARRAYDAT *in;
+  AUXCH mem;
+  int32_t FN;
+} AUTOCORR;
+
+int32_t init_autocorr(CSOUND *csound, AUTOCORR *p) {
+  if (UNLIKELY(p->in->sizes == NULL || p->in->dimensions != 1 ||
+               p->out->dimensions > 1))
+    return csound->InitError(csound, "%s",
+                            Str("autocorr: expected one-dimensional arrays"));
+  int32_t N = p->in->sizes[0], fn;
+  /* The real FFT supports powers of two up to 2^28. Zero padding
+     needs at least 2*N-1 samples. Check before doing signed arithmetic. */
+  if (UNLIKELY(N < 0 || N > (1 << 27)))
+    return csound->InitError(csound, "%s",
+                            Str("autocorr: input array too large"));
+  for (fn = 2; fn < N * 2 - 1; fn *= 2);
+  if (p->mem.auxp == NULL || p->mem.size < (size_t)fn * sizeof(MYFLT))
+    csound->AuxAlloc(csound, (size_t)fn * sizeof(MYFLT), &p->mem);
+  p->FN = fn;
+  if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  return OK;
+}
+
+int32_t perf_autocorr(CSOUND *csound, AUTOCORR *p) {
+  if (UNLIKELY(p->in->sizes == NULL || p->in->dimensions != 1 ||
+               p->out->dimensions != 1))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("autocorr: expected one-dimensional arrays"));
+  int32_t N = p->in->sizes[0];
+  if (UNLIKELY(N > p->FN / 2))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("autocorr: input array exceeds FFT workspace; "
+                                "reinitialise with the larger size"));
+  if (UNLIKELY(tabcheck(csound, p->out, N, &p->h) != OK))
+    return NOTOK;
+  if (N != 0)
+    csound->AutoCorrelation(csound, p->out->data, p->in->data, N,
+                            (MYFLT *)p->mem.auxp, p->FN);
+  return OK;
+}
+
+typedef struct _fft {
+  OPDS h;
+  ARRAYDAT *out;
+  ARRAYDAT *in, *in2;
+  MYFLT *f;
+  MYFLT b;
+  int32_t n;
+  void *setup;
+  AUXCH mem;
+} FFT;
+
+
+static inline MYFLT complex_rect_real(const COMPLEXDAT *value) {
+  return value->isPolar ? value->real * COS(value->imag) : value->real;
+}
+
+static inline MYFLT complex_rect_imag(const COMPLEXDAT *value) {
+  return value->isPolar ? value->real * SIN(value->imag) : value->imag;
+}
+
+static int32_t init_fft_complex_common(CSOUND *csound, FFT *p,
+                                       int32_t inverse) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t N = p->in->sizes[0];
+  if (UNLIKELY(p->in->dimensions > 1))
+    return csound->InitError(csound, "%s", inverse ?
+                             Str("fftinv: only one-dimensional arrays allowed") :
+                             Str("fft: only one-dimensional arrays allowed"));
+  /* Sanity checks: prevent pathological sizes and integer overflows */
+  if (UNLIKELY(N <= 0))
+    return csound->InitError(csound, "%s", inverse ?
+                             Str("fftinv: input array size must be > 0") :
+                             Str("fft: input array size must be > 0"));
+  /* Cap to a conservative upper bound to avoid overflow in allocations */
+  const int32_t MAX_REASONABLE_N = (1 << 24); /* ~16M elements */
+  if (UNLIKELY(N > MAX_REASONABLE_N)) {
+    /* Try to repair from backing allocation metadata if sizes[] is corrupted */
+    if (p->in->allocated > 0 && p->in->arrayMemberSize > 0) {
+      int64_t n2 = (int64_t)(p->in->allocated / (size_t)p->in->arrayMemberSize);
+      if (n2 > 0 && n2 <= MAX_REASONABLE_N) {
+        N = (int32_t)n2;
+        if (p->in->sizes && p->in->dimensions == 1)
+          p->in->sizes[0] = N;
+      } else {
+        return csound->InitError(csound, inverse ?
+                                 Str("fftinv: input array size (%d) is unreasonable") :
+                                 Str("fft: input array size (%d) is unreasonable"), N);
+      }
+    } else {
+      return csound->InitError(csound, inverse ?
+                               Str("fftinv: input array size (%d) is unreasonable") :
+                               Str("fft: input array size (%d) is unreasonable"), N);
+    }
+  }
+  if (UNLIKELY(N > 1 && (N & 1)))
+    return csound->InitError(csound,
+                             Str("fft: input array size (%d) must be 1 or even"),
+                             N);
+
+  if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  size_t bytes = (size_t)N * 2u * sizeof(MYFLT);
+  csound->AuxAlloc(csound, bytes, &p->mem);
+  return OK;
+}
+
+static int32_t init_fft_complex(CSOUND *csound, FFT *p) {
+  int32_t result = init_fft_complex_common(csound, p, 0);
+  if (UNLIKELY(result != OK))
+    return result;
+  if(p->out->arrayType == csound->GetType(csound, "Complex")
+     && p->in->arrayType == csound->GetType(csound, "Complex"))
+    p->b = *((MYFLT *)p->in2);
+  else if(p->out->arrayType == csound->GetType(csound, "Complex"))
+    p->b = 0;
+  else p->b = 1;
+  return OK;
+}
+
+static int32_t init_ifft_complex(CSOUND *csound, FFT *p) {
+  int32_t result = init_fft_complex_common(csound, p, 1);
+  if (UNLIKELY(result != OK))
+    return result;
+  p->b = 1;
+  return OK;
+}
+
+static int32_t perf_fft_complex(CSOUND *csound, FFT *p) {
+  int32_t N = p->in->sizes[0];
+  MYFLT *tmp = (MYFLT *)p->mem.auxp;
+  COMPLEXDAT *c = (COMPLEXDAT *) p->in->data;
+  if(p->in->arrayType == csound->GetType(csound, "Complex")) {
+    for(int32_t i = 0, j = 0; j < N; i+=2, j++) {
+      tmp[i] = complex_rect_real(&c[j]);
+      tmp[i+1] = complex_rect_imag(&c[j]);
+    }
+  } else {
+    MYFLT *re = p->in->data;
+    for(int32_t i = 0, j = 0; j < N; i+=2, j++) {
+      tmp[i] = re[j];
+      tmp[i+1] = 0;
+    }
+  }
+  if(!p->b)
+    csound->ComplexFFT(csound,tmp,N);
+  else csound->InverseComplexFFT(csound,tmp,N);
+  if(p->out->arrayType == csound->GetType(csound, "Complex")) {
+    c = (COMPLEXDAT *) p->out->data;
+    for(int32_t i = 0, j = 0; j < N; i+=2, j++) {
+      c[j].real = tmp[i];
+      c[j].imag = tmp[i+1];
+      c[j].isPolar = 0;
+    }
+  } else {
+    MYFLT *re = p->out->data;
+    for(int32_t i = 0, j = 0; j < N; i+=2, j++) {
+      re[j] = tmp[i];
+    }
+  }
+  return OK;
+}
+
+static int32_t validate_real_fft_size(CSOUND *csound, const char *opcode,
+                                      int32_t size) {
+  if (UNLIKELY(size < 2 || (size & 1)))
+    return csound->InitError(csound, "%s: %s", opcode,
+                             Str("transform size must be even and at least 2"));
+  return OK;
+}
+
+static int32_t init_rfft_r2c(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t   N = p->in->sizes[0];
+  if (UNLIKELY(p->in->dimensions > 1))
+    return csound->InitError(csound, "%s",
+                             Str("rfft: only one-dimensional arrays allowed"));
+  if (UNLIKELY(validate_real_fft_size(csound, "rfft", N) != OK))
+    return NOTOK;
+  if (UNLIKELY(tabinit(csound, p->out, N/2+1, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  p->setup = csound->RealFFTSetup(csound, N, FFT_FWD);
+  csound->AuxAlloc(csound, sizeof(MYFLT)*N, &p->mem);
+  return OK;
+}
+// Typed output has N / 2 + 1 unpacked complex bins.
+static int32_t perf_rfft_r2c(CSOUND *csound, FFT *p) {
+  int32_t N = p->in->sizes[0];
+  MYFLT *tmp = (MYFLT *)p->mem.auxp;
+  COMPLEXDAT *c = (COMPLEXDAT *) p->out->data;
+  memcpy(tmp,p->in->data,N*sizeof(MYFLT));
+  csound->RealFFT(csound,p->setup,tmp);
+  for(int32_t i = 0, j = 0; i < N; i+=2, j++) {
+    c[j].real = tmp[i];
+    if(j) c[j].imag = tmp[i+1];
+    else c[j].imag = 0.;
+    c[j].isPolar = 0;
+  }
+  c[N>>1].real = tmp[1];
+  c[N>>1].imag =  0.;
+  c[N>>1].isPolar = 0;
+  return OK;
+}
+
+static int32_t init_rfft_c2r(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t M = p->in->sizes[0];
+  if (UNLIKELY(p->in->dimensions > 1))
+    return csound->InitError(csound, "%s",
+                             Str("rifft: only one-dimensional arrays allowed"));
+  if (UNLIKELY(M < 2))
+    return csound->InitError(csound, "%s",
+                             Str("rifft: input spectrum must contain at least 2 bins"));
+  int32_t N = 2*(M - 1);
+  if (UNLIKELY(validate_real_fft_size(csound, "rifft", N) != OK))
+    return NOTOK;
+  if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  p->setup = csound->RealFFTSetup(csound, N, FFT_INV);
+  csound->AuxAlloc(csound, sizeof(MYFLT)*N, &p->mem);
+  return OK;
+}
+
+// M unpacked complex bins produce 2 * (M - 1) real samples.
+static int32_t perf_rfft_c2r(CSOUND *csound, FFT *p) {
+  int32_t N = p->out->sizes[0];
+  MYFLT *tmp = (MYFLT *)p->mem.auxp;
+  COMPLEXDAT *c = (COMPLEXDAT *) p->in->data;
+  int32_t halfN = N >> 1;
+  tmp[0] = complex_rect_real(&c[0]);
+  for(int32_t j = 1; j < halfN; j++) {
+    tmp[j << 1] = complex_rect_real(&c[j]);
+    tmp[(j << 1) + 1] = complex_rect_imag(&c[j]);
+  }
+  tmp[1] = complex_rect_real(&c[halfN]);
+  csound->RealFFT(csound,p->setup,tmp);
+  memcpy(p->out->data,tmp,N*sizeof(MYFLT));
+  return OK;
+}
+
+static int32_t init_rfft(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t   N = p->in->sizes[0];
+  if (UNLIKELY(p->in->dimensions > 1))
+    return csound->InitError(csound, "%s",
+                             Str("rfft: only one-dimensional arrays allowed"));
+  if (UNLIKELY(validate_real_fft_size(csound, "rfft", N) != OK))
+    return NOTOK;
+  if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  p->setup = csound->RealFFTSetup(csound, N, FFT_FWD);
+  return OK;
+}
+
+static  int32_t perf_rfft(CSOUND *csound, FFT *p) {
+  int32_t N = p->out->sizes[0];
+  memcpy(p->out->data,p->in->data,N*sizeof(MYFLT));
+  csound->RealFFT(csound,p->setup,p->out->data);
+  return OK;
+}
+
+static  int32_t rfft_i(CSOUND *csound, FFT *p) {
+  if (init_rfft(csound,p) == OK)
+    return perf_rfft(csound, p);
+  else return NOTOK;
+}
+
+static int32_t init_rifft(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t   N = p->in->sizes[0];
+  if (UNLIKELY(p->in->dimensions > 1))
+    return csound->InitError(csound, "%s",
+                             Str("rifft: only one-dimensional arrays allowed"));
+  if (UNLIKELY(validate_real_fft_size(csound, "rifft", N) != OK))
+    return NOTOK;
+  p->setup = csound->RealFFTSetup(csound, N, FFT_INV);
+  if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  return OK;
+}
+
+static int32_t perf_rifft(CSOUND *csound, FFT *p) {
+  int32_t N = p->in->sizes[0];
+  memcpy(p->out->data,p->in->data,N*sizeof(MYFLT));
+  csound->RealFFT(csound,p->setup,p->out->data);
+  return OK;
+}
+
+static int32_t rifft_i(CSOUND *csound, FFT *p) {
+  if (init_rifft(csound,p) == OK)
+    return perf_rifft(csound, p);
+  else return NOTOK;
+}
+
+static int32_t init_rfftmult(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  if(p->in2->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t   N = p->in->sizes[0];
+  if (UNLIKELY(N != p->in2->sizes[0]))
+    return csound->InitError(csound, "%s", Str("array sizes do not match\n"));
+  if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  return OK;
+}
+
+static int32_t perf_rfftmult(CSOUND *csound, FFT *p) {
+
+  int32_t N = p->out->sizes[0];
+  csound->RealFFTMult(csound,p->out->data,p->in->data,p->in2->data,N,1);
+  return OK;
+}
+
+static int32_t initialise_fft(CSOUND *csound, FFT *p) {
+  int32_t   N2 = p->in->sizes[0];
+  if (UNLIKELY(p->in->dimensions > 1))
+    return csound->InitError(csound, "%s",
+                             Str("fft: only one-dimensional arrays allowed"));
+  if (UNLIKELY(tabinit(csound, p->out, N2, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  return OK;
+}
+
+static int32_t perf_fft(CSOUND *csound, FFT *p) {
+  int32_t N2 = p->in->sizes[0];
+  memcpy(p->out->data,p->in->data,N2*sizeof(MYFLT));
+  csound->ComplexFFT(csound,p->out->data,N2/2);
+  return OK;
+}
+
+static int32_t fft_i(CSOUND *csound, FFT *p) {
+  if (initialise_fft(csound,p) == OK)
+    return perf_fft(csound, p);
+  else return NOTOK;
+}
+
+
+static int32_t init_ifft(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t   N2 = p->in->sizes[0];
+  if (UNLIKELY(p->in->dimensions > 1))
+    return csound->InitError(csound, "%s",
+                             Str("fftinv: only one-dimensional arrays allowed"));
+  if (UNLIKELY(tabinit(csound, p->out, N2, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  return OK;
+}
+
+static int32_t perf_ifft(CSOUND *csound, FFT *p) {
+  int32_t N2 = p->out->sizes[0];
+  memcpy(p->out->data,p->in->data,N2*sizeof(MYFLT));
+  csound->InverseComplexFFT(csound,p->out->data,N2/2);
+  return OK;
+}
+
+static int32_t ifft_i(CSOUND *csound, FFT *p) {
+  if (LIKELY(init_ifft(csound,p) == OK))
+    return perf_ifft(csound, p);
+  else return NOTOK;
+}
+
+static int32_t init_recttopol(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t N = p->in->sizes[0];
+  if (UNLIKELY(p->in->dimensions != 1 || p->out->dimensions > 1 ||
+               N < 2 || (N & 1)))
+    return csound->InitError(csound, "%s",
+                            Str("expected a one-dimensional packed real spectrum of even length"));
+  if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  return OK;
+}
+
+static int32_t prepare_packed_conversion(CSOUND *csound, FFT *p) {
+  if (UNLIKELY(p->in->sizes == NULL || p->in->dimensions != 1 ||
+               p->out->dimensions != 1 || p->in->sizes[0] < 2 ||
+               (p->in->sizes[0] & 1)))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("expected a one-dimensional packed real spectrum of even length"));
+  return tabcheck(csound, p->out, p->in->sizes[0], &p->h);
+}
+
+static int32_t perf_recttopol(CSOUND *csound, FFT *p) {
+  if (UNLIKELY(prepare_packed_conversion(csound, p) != OK))
+    return NOTOK;
+  int32_t i, end = p->out->sizes[0];
+  MYFLT *in, *out, mag, ph;
+  in = p->in->data;
+  out = p->out->data;
+  /* DC and Nyquist remain real values in the packed spectrum. */
+  out[0] = in[0];
+  out[1] = in[1];
+  for (i=2;i<end;i+=2 ) {
+    mag = HYPOT(in[i], in[i+1]);
+    ph = ATAN2(in[i+1],in[i]);
+    out[i] = mag; out[i+1] = ph;
+  }
+  return OK;
+}
+
+static int32_t perf_poltorect(CSOUND *csound, FFT *p) {
+  if (UNLIKELY(prepare_packed_conversion(csound, p) != OK))
+    return NOTOK;
+  int32_t i, end = p->out->sizes[0];
+  MYFLT *in, *out, re, im;
+  in = p->in->data;
+  out = p->out->data;
+  out[0] = in[0];
+  out[1] = in[1];
+  for (i=2;i<end;i+=2) {
+    re = in[i]*COS(in[i+1]);
+    im = in[i]*SIN(in[i+1]);
+    out[i] = re; out[i+1] = im;
+  }
+  return OK;
+}
+
+static int32_t init_poltorect2(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL || p->in2->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t N = p->in->sizes[0];
+  if (UNLIKELY(p->in->dimensions != 1 || p->in2->dimensions != 1 ||
+               p->out->dimensions > 1 || p->in2->sizes[0] != N ||
+               N < 2 || N > INT32_MAX/2+1))
+    return csound->InitError(csound, "%s",
+                            Str("pol2rect: expected equal-length one-dimensional magnitude and phase arrays"));
+  if (UNLIKELY(tabinit(csound, p->out, (N-1)*2,
+                       p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  return OK;
+}
+
+static int32_t perf_poltorect2(CSOUND *csound, FFT *p) {
+  if (UNLIKELY(p->in->sizes == NULL || p->in2->sizes == NULL ||
+               p->in->dimensions != 1 || p->in2->dimensions != 1 ||
+               p->out->dimensions != 1 ||
+               p->in->sizes[0] != p->in2->sizes[0] ||
+               p->in->sizes[0] < 2 || p->in->sizes[0] > INT32_MAX/2+1))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("pol2rect: expected equal-length one-dimensional magnitude and phase arrays"));
+  int32_t j, end = p->in->sizes[0]-1;
+  if (UNLIKELY(tabcheck(csound, p->out, end*2, &p->h) != OK))
+    return NOTOK;
+  MYFLT *mags = p->in->data, *phs = p->in2->data, *out = p->out->data;
+  MYFLT dc = mags[0]*COS(phs[0]), nyquist = mags[end]*COS(phs[end]);
+  /* Expand backwards so either input can supply the output storage. */
+  for (j=end-1;j>0;j--) {
+    MYFLT re = mags[j]*COS(phs[j]);
+    MYFLT im = mags[j]*SIN(phs[j]);
+    out[2*j] = re; out[2*j+1] = im;
+  }
+  out[0] = dc;
+  out[1] = nyquist;
+  return OK;
+}
+
+static int32_t init_mags(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t N = p->in->sizes[0];
+  if (UNLIKELY(p->in->dimensions != 1 || p->out->dimensions > 1 ||
+               N < 2 || (N & 1)))
+    return csound->InitError(csound, "%s",
+                            Str("expected a one-dimensional packed real spectrum of even length"));
+  if (UNLIKELY(tabinit(csound, p->out, N/2+1, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  return OK;
+}
+
+static int32_t prepare_spectrum_output(CSOUND *csound, FFT *p) {
+  if (UNLIKELY(p->in->sizes == NULL || p->in->dimensions != 1 ||
+               p->out->dimensions != 1 || p->in->sizes[0] < 2 ||
+               (p->in->sizes[0] & 1)))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("expected a one-dimensional packed real spectrum of even length"));
+  return tabcheck(csound, p->out, p->in->sizes[0]/2+1, &p->h);
+}
+
+static int32_t perf_mags(CSOUND *csound, FFT *p) {
+  if (UNLIKELY(prepare_spectrum_output(csound, p) != OK))
+    return NOTOK;
+  int32_t i,j, end = p->out->sizes[0];
+  MYFLT *in = p->in->data, *out = p->out->data;
+  /* Preserve Nyquist before an in-place write to out[1]. */
+  MYFLT nyquist = in[1];
+  for (i=2,j=1;j<end-1;i+=2,j++)
+    out[j] = HYPOT(in[i],in[i+1]);
+  out[0] = fabs(in[0]);
+  out[end-1] = fabs(nyquist);
+  return OK;
+}
+
+static int32_t perf_phs(CSOUND *csound, FFT *p) {
+  if (UNLIKELY(prepare_spectrum_output(csound, p) != OK))
+    return NOTOK;
+  int32_t i,j, end = p->out->sizes[0];
+  MYFLT *in = p->in->data, *out = p->out->data;
+  MYFLT dc = in[0], nyquist = in[1];
+  for (i=2,j=1;j<end-1;i+=2,j++)
+    out[j] = ATAN2(in[i+1],in[i]);
+  /* The two real-only bins have phase zero or pi according to their sign. */
+  out[0] = dc < FL(0.0) ? PI : FL(0.0);
+  out[end-1] = nyquist < FL(0.0) ? PI : FL(0.0);
+  return OK;
+}
+
+static int32_t init_logarray(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  if (UNLIKELY(tabinit(csound, p->out, p->in->sizes[0],
+                       p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  if (LIKELY(*((MYFLT *)p->in2)))
+    p->b = 1/log(*((MYFLT *)p->in2));
+  else
+    p->b = FL(1.0);
+  return OK;
+}
+
+static int32_t perf_logarray(CSOUND *csound, FFT *p) {
+  if (UNLIKELY(tabcheck(csound, p->out, p->in->sizes[0], &p->h) != OK))
+    return NOTOK;
+  int32_t i, end = p->out->sizes[0];
+  MYFLT bas = p->b;
+  MYFLT *in, *out;
+  in = p->in->data;
+  out = p->out->data;
+  if (LIKELY(bas))
+    for (i=0;i<end;i++)
+      out[i] = log(in[i])*bas;
+  else
+    for (i=0;i<end;i++)
+      out[i] = log(in[i]);
+  return OK;
+}
+
+static int32_t init_rtoc(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t N = p->in->sizes[0];
+  if (UNLIKELY(p->in->dimensions != 1 || p->out->dimensions > 1 ||
+               N > INT32_MAX/2))
+    return csound->InitError(csound, "%s",
+                            Str("r2c: invalid array shape or size"));
+  if (UNLIKELY(tabinit(csound, p->out, N*2, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  return OK;
+}
+
+static int32_t rtoc_copy(FFT *p) {
+  int32_t j = p->out->sizes[0]/2;
+  MYFLT *in = p->in->data, *out = p->out->data;
+  /* Expand backwards so writes do not destroy a reused input. */
+  while (j-- > 0) {
+    out[2*j] = in[j];
+    out[2*j+1] = FL(0.0);
+  }
+  return OK;
+}
+
+static int32_t perf_rtoc(CSOUND *csound, FFT *p) {
+  if (UNLIKELY(p->in->sizes == NULL || p->in->dimensions != 1 ||
+               p->out->dimensions != 1 || p->in->sizes[0] > INT32_MAX/2))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("r2c: invalid array shape or size"));
+  if (UNLIKELY(tabcheck(csound, p->out, p->in->sizes[0]*2, &p->h) != OK))
+    return NOTOK;
+  return rtoc_copy(p);
+}
+
+static int32_t rtoc_i(CSOUND *csound, FFT *p) {
+  if (LIKELY(init_rtoc(csound,p) == OK))
+    return rtoc_copy(p);
+  else return NOTOK;
+}
+
+static int32_t init_ctor(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t N = p->in->sizes[0];
+  if (UNLIKELY(p->in->dimensions != 1 || p->out->dimensions > 1 || (N & 1)))
+    return csound->InitError(csound, "%s",
+                            Str("c2r: expected a one-dimensional array of complex pairs"));
+  if (UNLIKELY(tabinit(csound, p->out, N/2, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  return OK;
+}
+
+static int32_t ctor_copy(FFT *p) {
+  int32_t j, end = p->out->sizes[0];
+  MYFLT *in = p->in->data, *out = p->out->data;
+  for (j=0;j<end;j++)
+    out[j] = in[2*j];
+  return OK;
+}
+
+static int32_t perf_ctor(CSOUND *csound, FFT *p) {
+  if (UNLIKELY(p->in->sizes == NULL || p->in->dimensions != 1 ||
+               p->out->dimensions != 1 || (p->in->sizes[0] & 1)))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("c2r: expected a one-dimensional array of complex pairs"));
+  if (UNLIKELY(tabcheck(csound, p->out, p->in->sizes[0]/2, &p->h) != OK))
+    return NOTOK;
+  return ctor_copy(p);
+}
+
+static int32_t ctor_i(CSOUND *csound, FFT *p) {
+  if (LIKELY(init_ctor(csound,p) == OK))
+    return ctor_copy(p);
+  else return NOTOK;
+}
+
+
+static int32_t init_window(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  if (UNLIKELY(p->in->dimensions != 1 || p->out->dimensions > 1))
+    return csound->InitError(csound, "%s",
+                            Str("window: expected one-dimensional arrays"));
+  if (UNLIKELY(*p->f != FL(0) && *p->f != FL(1)))
+    return csound->InitError(csound, "%s", Str("window: type must be 0 or 1"));
+  int32_t   N = p->in->sizes[0];
+  int32_t   i;
+  MYFLT *w;
+  if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  p->n = N;
+  if (N > 0 && (p->mem.auxp == 0 || p->mem.size < (size_t) N*sizeof(MYFLT)))
+    csound->AuxAlloc(csound, (size_t) N*sizeof(MYFLT), &p->mem);
+  w = (MYFLT *) p->mem.auxp;
+  if (*p->f == FL(0)) {
+    for (i=0; i<N; i++) w[i] = 0.54 - 0.46*cos(i*TWOPI/N);
+  } else {
+    for (i = 0; i < N; i++)
+      w[i] = 0.5 - 0.5*cos(i*TWOPI/N);
+  }
+  return OK;
+}
+
+static int32_t perf_window(CSOUND *csound, FFT *p) {
+  int32_t i, end = p->n, off;
+  double offset = *((MYFLT *)p->in2);
+  if (UNLIKELY(p->in->sizes == NULL || p->in->dimensions != 1 ||
+               p->in->sizes[0] != end || p->out->dimensions != 1))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("window: array shape changed"));
+  if (UNLIKELY(tabcheck(csound, p->out, end, &p->h) != OK))
+    return NOTOK;
+  if (UNLIKELY(offset < 0 || !isfinite(offset)))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("window: offset must be finite and non-negative"));
+  if (end == 0) return OK;
+  /* Reduce before converting to an index; offsets may span many windows. */
+  if (offset >= end) offset = fmod(offset, end);
+  off = (int32_t) offset;
+  if (off) off = end - off;
+  MYFLT *in, *out, *w;
+  in = p->in->data;
+  out = p->out->data;
+  w = (MYFLT *) p->mem.auxp;
+  for(i=0;i<end;i++) {
+    out[i] = in[i]*w[off];
+    if (++off == end) off = 0;
+  }
+  return OK;
+
+}
+
+#include "pstream.h"
+
+typedef struct _pvsceps {
+  OPDS    h;
+  ARRAYDAT  *out;
+  PVSDAT  *fin;
+  MYFLT   *coefs;
+  void *setup;
+  uint32_t  lastframe;
+} PVSCEPS;
+
+static int32_t pvsceps_init(CSOUND *csound, PVSCEPS *p) {
+  int32_t N = p->fin->N;
+  p->setup = csound->RealFFTSetup(csound, N/2, FFT_FWD);
+  if (UNLIKELY(tabinit(csound, p->out, N/2+1, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  p->lastframe = 0;
+  return OK;
+}
+
+static int32_t pvsceps_perf(CSOUND *csound, PVSCEPS *p) {
+  if (p->lastframe < p->fin->framecount) {
+    int32_t N = p->fin->N;
+    int32_t i, j;
+    MYFLT *ceps = p->out->data;
+    MYFLT coefs = *p->coefs;
+    float *fin = (float *) p->fin->frame.auxp;
+    if (UNLIKELY(!(coefs >= FL(0.0))))
+      return csound->PerfError(csound, &p->h, "%s",
+                              Str("cepstrum coefficient count must be nonnegative"));
+    for (i=j=0; i < N; i+=2, j++) {
+      ceps[j] = log(fin[i] > 0.0 ? fin[i] : 1e-20);
+    }
+    ceps[N/2] = fin[N];
+    csound->RealFFT(csound, p->setup, ceps);
+    if (coefs) {
+      // lifter coefs
+      for (i = coefs*2 < N/2 ? (int32_t)(coefs*2) : N/2;
+           i < N/2; i++) ceps[i] = 0.0;
+      ceps[N/2] = 0.0;
+    }
+    p->lastframe = p->fin->framecount;
+  }
+  return OK;
+}
+
+
+static int32_t init_ceps(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t N = p->in->sizes[0]-1;
+  if (UNLIKELY(N < 64))
+    return csound->InitError(csound, "%s",
+                             Str("FFT size too small (min 64 samples)\n"));
+  p->setup = csound->RealFFTSetup(csound, N, FFT_FWD);
+  if (UNLIKELY(tabinit(csound, p->out, N+1, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  return OK;
+}
+
+
+static int32_t perf_ceps(CSOUND *csound, FFT *p) {
+  int32_t siz = p->out->sizes[0]-1, i;
+  MYFLT *ceps = p->out->data;
+  MYFLT coefs = *((MYFLT *)p->in2);
+  MYFLT *mags = (MYFLT *) p->in->data;
+  if (UNLIKELY(!(coefs >= FL(0.0))))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("cepstrum coefficient count must be nonnegative"));
+  for (i=0; i < siz; i++) {
+    ceps[i] = log(mags[i] > 0.0 ? mags[i] : 1e-20);
+  }
+  ceps[siz] = mags[siz];
+  csound->RealFFT(csound, p->setup, ceps);
+  if (coefs) {
+    // lifter coefs
+    for (i = coefs*2 < siz ? (int32_t)(coefs*2) : siz;
+         i < siz; i++) ceps[i] = 0.0;
+    ceps[siz] = 0.0;
+  }
+  return OK;
+}
+
+static int32_t init_iceps(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  int32_t N = p->in->sizes[0]-1;
+  p->setup = csound->RealFFTSetup(csound, N, FFT_INV);
+  if (UNLIKELY(tabinit(csound, p->out, N+1, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  N++;
+  if (p->mem.auxp == NULL || p->mem.size < N*sizeof(MYFLT))
+    csound->AuxAlloc(csound, N*sizeof(MYFLT), &p->mem);
+  return OK;
+}
+
+static int32_t perf_iceps(CSOUND *csound, FFT *p) {
+  int32_t siz = p->in->sizes[0]-1, i;
+  MYFLT *spec = (MYFLT *)p->mem.auxp;
+  MYFLT *out = p->out->data;
+  memcpy(spec, p->in->data, siz*sizeof(MYFLT));
+  csound->RealFFT(csound,p->setup,spec);
+  for (i=0; i < siz; i++) {
+    out[i] = exp(spec[i]);
+  }
+  /* The final magnitude is carried outside the FFT-packed coefficients. */
+  out[siz] = p->in->data[siz];
+  return OK;
+}
+
+static int32_t rows_init(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  if (p->in->dimensions == 2) {
+    int32_t siz = p->in->sizes[1];
+    if (UNLIKELY(tabinit(csound, p->out, siz, p->h.insdshead) != OK))
+      return csound_array_init_resize_error(csound);
+    return OK;
+  }
+  else
+    return csound->InitError(csound, "%s",
+                             Str("in array not 2-dimensional\n"));
+}
+
+static int32_t rows_perf(CSOUND *csound, FFT *p) {
+  int32_t start = *((MYFLT *)p->in2);
+  if (LIKELY(start >= 0 && start < p->in->sizes[0])) {
+    int32_t bytes =  p->in->sizes[1]*sizeof(MYFLT);
+    start *= p->in->sizes[1];
+    memcpy(p->out->data,p->in->data+start,bytes);
+    return OK;
+  }
+  else return csound->PerfError(csound,  &(p->h),
+                                "%s", Str("requested row is out of range\n"));
+}
+
+/* Getrow for string arrays */
+static int32_t rows_perf_S(CSOUND *csound, FFT *p)
+{
+  ARRAYDAT* dat = p->in;      /* The data in e 2_D array */
+  int32_t i;
+  int32_t index = (int32_t)(*((MYFLT *)p->in2));
+  if (LIKELY(index >= 0 && index < p->in->sizes[0])) {
+    index = (index * dat->sizes[1]);
+    for (i = 0; i < p->in->sizes[1]; i++) {
+      dat->arrayType->copyValue(csound, dat->arrayType,
+          csound_string_array_element(p->out, i),
+          csound_string_array_element(dat, (size_t)index + i),
+          p->h.insdshead);
+    }
+    return OK;
+  }
+  else return csound->PerfError(csound,  &(p->h),
+                                "%s", Str("requested row is out of range\n"));
+}
+
+static int32_t rows_i(CSOUND *csound, FFT *p) {
+  if (rows_init(csound,p) == OK) {
+    int32_t start = *((MYFLT *)p->in2);
+    if (LIKELY(start >= 0 && start < p->in->sizes[0])) {
+      int32_t bytes =  p->in->sizes[1]*sizeof(MYFLT);
+      start *= p->in->sizes[1];
+      memcpy(p->out->data,p->in->data+start,bytes);
+      return OK;
+    }
+    else return csound->InitError(csound, "%s",
+                                  Str("requested row is out of range\n"));
+
+  }
+  else return NOTOK;
+}
+
+/* A matrix input supplies its first row, as documented for both setters. */
+static int32_t set_vector_length(const ARRAYDAT *in) {
+  if (in->sizes == NULL || in->dimensions < 1 || in->dimensions > 2)
+    return -1;
+  return in->dimensions == 1 ? in->sizes[0] :
+    (in->sizes[0] > 0 ? in->sizes[1] : 0);
+}
+
+static int32_t set_matrix_error(CSOUND *csound, FFT *p, int32_t init,
+                                const char *message) {
+  return init ? csound->InitError(csound, "%s", message) :
+    csound->PerfError(csound, &p->h, "%s", message);
+}
+
+/* Grow at initialization only. Copy by coordinates because a wider matrix
+   changes the row stride. Type callbacks keep string ownership independent. */
+static int32_t tabensure2D(CSOUND *csound, ARRAYDAT *out,
+                            int32_t rows, int32_t columns, INSDS *ctx) {
+  if (out->data != NULL && out->dimensions == 2) {
+    if (rows <= out->sizes[0] && columns <= out->sizes[1])
+      return csound_array_prepare_write(csound, out, ctx);
+    rows = rows > out->sizes[0] ? rows : out->sizes[0];
+    columns = columns > out->sizes[1] ? columns : out->sizes[1];
+  }
+  ARRAYDAT prepared = {0};
+  const CS_TYPE *arrayType = csound->GetType(csound, "[");
+  size_t count;
+  prepared.arrayType = out->arrayType;
+  prepared.dimensions = 2;
+  prepared.sizes = (int32_t *)csound->Malloc(csound, 2 * sizeof(int32_t));
+  prepared.sizes[0] = rows;
+  prepared.sizes[1] = columns;
+  if (UNLIKELY(csound_array_member_count(&prepared, &count) != OK ||
+               csound_array_ensure_capacity(csound, &prepared,
+                                            count ? count : 1, ctx) != OK)) {
+    arrayType->freeVariableMemory(csound, &prepared);
+    return NOTOK;
+  }
+  if (out->data != NULL && out->dimensions == 2) {
+    for (int32_t r = 0; r < out->sizes[0]; ++r) {
+      for (int32_t c = 0; c < out->sizes[1]; ++c) {
+        void *dst = (char *)prepared.data +
+          ((size_t)r * columns + c) * prepared.arrayMemberSize;
+        void *src = (char *)out->data +
+          ((size_t)r * out->sizes[1] + c) * out->arrayMemberSize;
+        out->arrayType->copyValue(csound, out->arrayType, dst, src, ctx);
+      }
+    }
+  }
+  arrayType->freeVariableMemory(csound, out);
+  *out = prepared;
+  return OK;
+}
+
+static int32_t set_matrix_init(CSOUND *csound, FFT *p, int32_t column) {
+  int32_t length = set_vector_length(p->in);
+  double index = *((MYFLT *)p->in2);
+  if (UNLIKELY(length < 0 ||
+               (p->out->data != NULL && p->out->dimensions != 2)))
+    return csound->InitError(csound, "%s",
+                            Str("setrow/setcol: invalid array dimensions"));
+  if (UNLIKELY(!(index >= 0 && index < INT32_MAX)))
+    return csound->InitError(csound, "%s",
+                            Str("setrow/setcol: index out of range"));
+  int32_t extent = (int32_t)index + 1;
+  if (UNLIKELY(tabensure2D(csound, p->out, column ? length : extent,
+                           column ? extent : length, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  return OK;
+}
+
+static int32_t set_matrix_write(CSOUND *csound, FFT *p, int32_t column,
+                                 int32_t init) {
+  int32_t length = set_vector_length(p->in);
+  double index = *((MYFLT *)p->in2);
+  if (UNLIKELY(length < 0 || p->out->dimensions != 2 ||
+               p->out->sizes == NULL))
+    return set_matrix_error(csound, p, init,
+                            Str("setrow/setcol: invalid array dimensions"));
+  if (UNLIKELY(!(index >= 0 && index < p->out->sizes[column ? 1 : 0])))
+    return set_matrix_error(csound, p, init,
+                            Str("setrow/setcol: index out of range"));
+  int32_t rows = p->out->sizes[0], columns = p->out->sizes[1];
+  if (UNLIKELY(column ? length < rows : length > columns))
+    return set_matrix_error(csound, p, init,
+                            Str("setrow/setcol: input does not fit output"));
+  if (UNLIKELY((init ? csound_array_prepare_write(csound, p->out, p->h.insdshead) :
+                csound_array_try_prepare_write(csound, p->out, p->h.insdshead))
+               != OK))
+    return set_matrix_error(csound, p, init,
+                            Str("setrow/setcol: cannot write shared array"));
+  size_t start = column ? (size_t)index : (size_t)index * columns;
+  size_t stride = column ? columns : 1;
+  int32_t count = column ? rows : length;
+  if (p->out->arrayType->freeVariableMemory == NULL) {
+    if (!column)
+      memmove(p->out->data + start, p->in->data, (size_t)count * sizeof(MYFLT));
+    else
+      for (int32_t j = count; j-- > 0;)
+        p->out->data[start + (size_t)j * stride] = p->in->data[j];
+  }
+  else {
+    /* Backwards copying also supports using the first row of the output
+       itself as input without overwriting values still to be read. */
+    for (int32_t j = count; j-- > 0;)
+      p->out->arrayType->copyValue(csound, p->out->arrayType,
+          csound_string_array_element(p->out, start + (size_t)j * stride),
+          csound_string_array_element(p->in, j), p->h.insdshead);
+  }
+  return OK;
+}
+
+static int32_t set_rows_init(CSOUND *csound, FFT *p) {
+  return set_matrix_init(csound, p, 0);
+}
+
+static int32_t set_cols_init(CSOUND *csound, FFT *p) {
+  return set_matrix_init(csound, p, 1);
+}
+
+static int32_t set_rows_perf(CSOUND *csound, FFT *p) {
+  return set_matrix_write(csound, p, 0, 0);
+}
+
+static int32_t set_cols_perf(CSOUND *csound, FFT *p) {
+  return set_matrix_write(csound, p, 1, 0);
+}
+
+static int32_t set_rows_i(CSOUND *csound, FFT *p) {
+  if (set_rows_init(csound, p) != OK) return NOTOK;
+  return set_matrix_write(csound, p, 0, 1);
+}
+
+static int32_t set_cols_i(CSOUND *csound, FFT *p) {
+  if (set_cols_init(csound, p) != OK) return NOTOK;
+  return set_matrix_write(csound, p, 1, 1);
+}
+
+static int32_t rows_init_S(CSOUND *csound, FFT *p) {
+  if (rows_init(csound, p)==0)
+    return rows_perf_S(csound, p);
+  return NOTOK;
+}
+
+static int32_t cols_init(CSOUND *csound, FFT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  if (LIKELY(p->in->dimensions == 2)) {
+    int32_t siz = p->in->sizes[0];
+    if (UNLIKELY(tabinit(csound, p->out, siz, p->h.insdshead) != OK))
+      return csound_array_init_resize_error(csound);
+    return OK;
+  }
+  else
+    return csound->InitError(csound, "%s",
+                             Str("in array not 2-dimensional\n"));
+}
+
+static int32_t cols_perf(CSOUND *csound, FFT *p) {
+  int32_t start = *((MYFLT *)p->in2);
+
+  if (LIKELY(start >= 0 && start < p->in->sizes[1])) {
+    int32_t j,i,collen =  p->in->sizes[1], len = p->in->sizes[0];
+    for (j=0,i=start; j < len; i+=collen, j++) {
+      p->out->data[j] = p->in->data[i];
+    }
+    return OK;
+  }
+  else return csound->PerfError(csound,  &(p->h),
+                                "%s", Str("requested col is out of range\n"));
+}
+
+static int32_t cols_i(CSOUND *csound, FFT *p) {
+  if (cols_init(csound, p) == OK) {
+    int32_t start = *((MYFLT *)p->in2);
+    if (LIKELY(start >= 0 && start < p->in->sizes[1])) {
+      int32_t j,i,collen =  p->in->sizes[1], len = p->in->sizes[0];
+      for (j=0,i=start; j < len; i+=collen, j++) {
+        p->out->data[j] = p->in->data[i];
+      }
+      return OK;
+    }
+    else return csound->InitError(csound, "%s",
+                                  Str("requested col is out of range\n"));
+  }
+  else return NOTOK;
+}
+
+static int32_t cols_perf_S(CSOUND *csound, FFT *p) {
+  ARRAYDAT* dat = p->in;      /* The data in e 2_D array */
+  int32_t i;
+  int32_t index = (int32_t)(*((MYFLT *)p->in2));
+  if (LIKELY(index >= 0 && index < p->in->sizes[1])) {
+    for (i = 0; i < p->in->sizes[0]; i++) {
+      dat->arrayType->copyValue(csound, dat->arrayType,
+          csound_string_array_element(p->out, i),
+          csound_string_array_element(dat, (size_t)i * dat->sizes[1] + index),
+          p->h.insdshead);
+    }
+    return OK;
+  }
+  else return csound->PerfError(csound,  &(p->h),
+                                "%s", Str("requested col is out of range\n"));
+}
+
+static int32_t cols_init_S(CSOUND *csound, FFT *p) {
+  if (cols_init(csound,p)==0)
+    return cols_perf_S(csound, p);
+  return NOTOK;
+}
+
+typedef struct {
+  OPDS h;
+  ARRAYDAT *out;
+  MYFLT *in;
+  uint32_t size, n;
+} SHIFTIN;
+
+typedef struct {
+  OPDS h;
+  MYFLT *out;
+  ARRAYDAT *in;
+  MYFLT *offset;
+  uint32_t size, n;
+} SHIFTOUT;
+
+static int32_t shiftin_init(CSOUND *csound, SHIFTIN *p) {
+  int32_t size = CS_KSMPS;
+  if (UNLIKELY(p->out->dimensions > 1))
+    return csound->InitError(csound, "%s",
+                            Str("shiftin: expected a one-dimensional array"));
+  if (p->out->sizes != NULL && p->out->sizes[0] > size)
+    size = p->out->sizes[0];
+  if (UNLIKELY(tabinit(csound, p->out, size, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  p->size = size;
+  p->n = 0;
+  return OK;
+}
+
+static int32_t shiftin_perf(CSOUND *csound, SHIFTIN *p) {
+  if (UNLIKELY(p->out->sizes == NULL || p->out->dimensions != 1 ||
+               p->out->sizes[0] != (int32_t) p->size))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("shiftin: array shape changed"));
+  if (UNLIKELY(tabcheck(csound, p->out, p->size, &p->h) != OK))
+    return NOTOK;
+  uint32_t offset = p->h.insdshead->ksmps_offset;
+  uint32_t count = CS_KSMPS - p->h.insdshead->ksmps_no_end - offset;
+  uint32_t n = p->n, remaining = p->size - n;
+  MYFLT *in = p->in + offset;
+  if (count == 0) return OK;
+  if (count < remaining) {
+    memcpy(p->out->data+n, in, count*sizeof(MYFLT));
+    n += count;
+  }
+  else {
+    memcpy(p->out->data+n, in, remaining*sizeof(MYFLT));
+    if (count > remaining)
+      memcpy(p->out->data, in+remaining, (count-remaining)*sizeof(MYFLT));
+    n = count - remaining;
+  }
+  p->n = n;
+  return OK;
+}
+
+
+static int32_t shiftout_init(CSOUND *csound, SHIFTOUT *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  if (UNLIKELY(p->in->dimensions != 1))
+    return csound->InitError(csound, "%s",
+                            Str("shiftout: expected a one-dimensional array"));
+  int32_t siz = p->in->sizes[0];
+  if (UNLIKELY(siz < (int32_t) CS_KSMPS))
+    return csound->InitError(csound, "%s", Str("input array too small\n"));
+  double offset = *p->offset;
+  if (UNLIKELY(!isfinite(offset)))
+    return csound->InitError(csound, "%s",
+                            Str("shiftout: offset must be finite"));
+  offset = fmod(trunc(offset), siz);
+  if (offset < 0) offset += siz;
+  p->n = (uint32_t) offset;
+  p->size = siz;
+  return OK;
+}
+
+static int32_t shiftout_perf(CSOUND *csound, SHIFTOUT *p) {
+  if (UNLIKELY(p->in->sizes == NULL || p->in->dimensions != 1 ||
+               p->in->sizes[0] != (int32_t) p->size))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("shiftout: array shape changed"));
+  uint32_t offset = p->h.insdshead->ksmps_offset;
+  uint32_t early = p->h.insdshead->ksmps_no_end;
+  uint32_t end = CS_KSMPS - early, count = end - offset;
+  uint32_t n = p->n, remaining = p->size - n;
+  if (offset) memset(p->out, 0, offset*sizeof(MYFLT));
+  if (early) memset(p->out+end, 0, early*sizeof(MYFLT));
+  if (count == 0) return OK;
+  MYFLT *out = p->out + offset;
+  if (count < remaining) {
+    memcpy(out, p->in->data+n, count*sizeof(MYFLT));
+    n += count;
+  }
+  else {
+    memcpy(out, p->in->data+n, remaining*sizeof(MYFLT));
+    if (count > remaining)
+      memcpy(out+remaining, p->in->data, (count-remaining)*sizeof(MYFLT));
+    n = count - remaining;
+  }
+  p->n = n;
+  return OK;
+}
+
+
+typedef struct {
+  OPDS h;
+  ARRAYDAT *out, *in;
+  MYFLT *mode;
+  AUXCH mem;
+  int32_t size, unwrap;
+} UNWRAP;
+
+static int32_t unwrap_set(CSOUND *csound, UNWRAP *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  if (UNLIKELY(p->in->dimensions != 1 || p->out->dimensions > 1))
+    return csound->InitError(csound, "%s",
+                            Str("unwrap: expected one-dimensional arrays"));
+  if (UNLIKELY(*p->mode != FL(0) && *p->mode != FL(1)))
+    return csound->InitError(csound, "%s", Str("unwrap: mode must be 0 or 1"));
+  int32_t N = p->in->sizes[0];
+  if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  p->size = N;
+  p->unwrap = *p->mode == FL(1);
+  if (p->unwrap && N > 0) {
+    csound->AuxAlloc(csound, (size_t) N*sizeof(MYFLT), &p->mem);
+  }
+  return OK;
+}
+
+static int32_t unwrap(CSOUND *csound, UNWRAP *p) {
+  if (UNLIKELY(p->in->sizes == NULL || p->in->dimensions != 1 ||
+               p->in->sizes[0] != p->size || p->out->dimensions != 1))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("unwrap: array shape changed"));
+  if (UNLIKELY(tabcheck(csound, p->out, p->size, &p->h) != OK))
+    return NOTOK;
+  int32_t i;
+  MYFLT *in = p->in->data;
+  MYFLT *phs = p->out->data;
+  if (!p->unwrap) {
+    for (i=0; i < p->size; i++) {
+      phs[i] = in[i];
+      while (phs[i] >= PI) phs[i] -= TWOPI;
+      while (phs[i] < -PI) phs[i] += TWOPI;
+    }
+  } else {
+    MYFLT *ophs = (MYFLT *) p->mem.auxp;
+    for (i=0; i < p->size; i++) {
+      double phase = (double) in[i] - ophs[i];
+      while (phase >= PI) phase -= TWOPI;
+      while (phase < -PI) phase += TWOPI;
+      phs[i] = (MYFLT) (ophs[i] + phase);
+      ophs[i] = phs[i];
+    }
+  }
+  return OK;
+}
+
+
+static int32_t init_dct_common(CSOUND *csound, FFT *p, int32_t direction) {
+  if (UNLIKELY(p->in->sizes == NULL || p->in->dimensions != 1 ||
+               p->out->dimensions > 1))
+    return csound->InitError(csound, "%s",
+                            Str("dct/dctinv: expected one-dimensional arrays"));
+  int32_t N = p->in->sizes[0];
+  /* DCT uses a real FFT of length 4*N, whose largest supported size is 2^28. */
+  if (UNLIKELY(N < 1 || N > (1 << 26) || (N & (N - 1))))
+    return csound->InitError(csound, "%s",
+                            Str("dct/dctinv: size must be a power of two "
+                                "between 1 and 2^26"));
+  if (UNLIKELY(tabinit(csound, p->out, N, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  p->n = N;
+  p->setup = csound->DCTSetup(csound, N, direction);
+  return OK;
+}
+
+static int32_t init_dct(CSOUND *csound, FFT *p) {
+  return init_dct_common(csound, p, FFT_FWD);
+}
+
+static int32_t init_dctinv(CSOUND *csound, FFT *p) {
+  return init_dct_common(csound, p, FFT_INV);
+}
+
+static int32_t kdct(CSOUND *csound, FFT *p) {
+  if (UNLIKELY(p->in->sizes == NULL || p->in->dimensions != 1 ||
+               p->out->dimensions != 1))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("dct/dctinv: expected one-dimensional arrays"));
+  if (UNLIKELY(p->in->sizes[0] != p->n))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("dct/dctinv: input size changed; "
+                                "reinitialise the opcode"));
+  if (UNLIKELY(tabcheck(csound, p->out, p->n, &p->h) != OK))
+    return NOTOK;
+  memmove(p->out->data, p->in->data, (size_t)p->n * sizeof(MYFLT));
+  csound->DCT(csound, p->setup, p->out->data);
+  return OK;
+}
+
+static int32_t dct(CSOUND *csound, FFT *p) {
+  if (init_dct(csound, p) != OK) return NOTOK;
+  return kdct(csound, p);
+}
+
+static int32_t dctinv(CSOUND *csound, FFT *p) {
+  if (init_dctinv(csound, p) != OK) return NOTOK;
+  return kdct(csound, p);
+}
+
+static int32_t perf_pows(CSOUND *csound, FFT *p) {
+  if (UNLIKELY(prepare_spectrum_output(csound, p) != OK))
+    return NOTOK;
+  int32_t i,j, end = p->out->sizes[0];
+  MYFLT *in = p->in->data, *out = p->out->data;
+  MYFLT nyquist = in[1];
+  for (i=2,j=1;j<end-1;i+=2,j++)
+    out[j] = in[i]*in[i]+in[i+1]*in[i+1];
+  out[0] = in[0]*in[0];
+  out[end-1] = nyquist*nyquist;
+  return OK;
+}
+
+typedef struct _MFB {
+  OPDS h;
+  ARRAYDAT *out;
+  ARRAYDAT *in;
+  MYFLT *low;
+  MYFLT *up;
+  MYFLT *len;
+  AUXCH  bins;
+  int32_t bands;
+} MFB;
+
+static inline MYFLT f2mel(MYFLT f) {
+  return 1125.*log(1.+f/700.);
+}
+
+static inline int32_t mel2bin(MYFLT m, int32_t N, MYFLT sr) {
+  MYFLT f = 700.*(exp(m/1125.) - 1.);
+  MYFLT bin = f/(sr/(FL(2.0)*N));
+  /* Clip before the integer conversion, including frequencies above Nyquist. */
+  if (bin >= N + 1) return N + 1;
+  return (int32_t)bin;
+}
+
+static int32_t mfb_init(CSOUND *csound, MFB *p) {
+  if(p->in->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  if (UNLIKELY(p->in->dimensions != 1 || p->out->dimensions > 1))
+    return csound->InitError(csound, "%s",
+                            Str("mfb: expected one-dimensional arrays"));
+  int32_t N = p->in->sizes[0];
+  if (UNLIKELY(!(*p->len >= FL(1.0) && *p->len < N)))
+    return csound->InitError(csound, "%s",
+                            Str("mfb: band count must be positive and less than input length"));
+  int32_t L = (int32_t)*p->len;
+  if (UNLIKELY(tabinit(csound, p->out, L, p->h.insdshead) != OK))
+    return csound_array_init_resize_error(csound);
+  p->bands = L;
+  size_t bytes = ((size_t)L + 2)*sizeof(int32_t);
+  if (p->bins.auxp == NULL || p->bins.size < bytes)
+    csound->AuxAlloc(csound, bytes, &p->bins);
+  return OK;
+}
+
+static int32_t mfb(CSOUND *csound, MFB *p) {
+  int32_t L = p->bands;
+  if (UNLIKELY(p->in->sizes == NULL || p->in->dimensions != 1 ||
+               p->in->sizes[0] <= L || p->out->dimensions != 1))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("mfb: invalid array shape"));
+  if (UNLIKELY(tabcheck(csound, p->out, L, &p->h) != OK))
+    return NOTOK;
+  MYFLT low = *p->low, high = *p->up;
+  if (UNLIKELY(!(low >= FL(0.0) && high >= low) || !isfinite(high)))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("mfb: frequencies must be finite, non-negative and ordered"));
+  int32_t i,j;
+  int32_t *bin = (int32_t *) p->bins.auxp;
+  MYFLT start,max,end;
+  MYFLT g = FL(0.0), incr, decr;
+  int32_t N = p->in->sizes[0];
+  MYFLT sum = FL(0.0);
+  MYFLT *out = p->out->data;
+  MYFLT *in = p->in->data;
+  MYFLT sr = CS_ESR;
+
+  start = f2mel(low);
+  end = f2mel(high);
+  incr = (end-start)/(L+1);
+
+
+
+  for (size_t edge = 0; edge < (size_t)L + 2; edge++) {
+    bin[edge] = mel2bin(start,N-1,sr);
+    start += incr;
+  }
+
+  for (i=0; i < L; i++) {
+    start = bin[i];
+    max = bin[i+1];
+    end = bin[i+2];
+    /* A narrow Mel band can map two or all three edges to the same FFT bin. */
+    incr = max > start ? FL(1.0)/(max - start) : FL(0.0);
+    decr = end > max ? FL(1.0)/(end - max) : FL(0.0);
+    for (j=start; j < max; j++) {
+      sum += in[j]*g;
+      g += incr;
+    }
+    g = FL(1.0);
+    for (j=max; j < end; j++) {
+      sum += in[j]*g;
+      g -= decr;
+    }
+    out[i] = end > start ? sum/(end - start) : FL(0.0);
+
+    g = FL(0.0);
+    sum = FL(0.0);
+  }
+
+  return OK;
+}
+
+static int32_t mfbi(CSOUND *csound, MFB *p) {
+  if (LIKELY(mfb_init(csound,p) == OK))
+    return mfb(csound,p);
+  else return NOTOK;
+}
+
+typedef struct _centr{
+  OPDS h;
+  MYFLT *out;
+  ARRAYDAT *in;
+} CENTR;
+
+static int32_t array_centroid(CSOUND *csound, CENTR *p) {
+  if(p->in->sizes == NULL || p->in->dimensions != 1 || p->in->sizes[0] < 2)
+    return NOTOK;
+  MYFLT *in = p->in->data,a=FL(0.0),b=FL(0.0);
+  int32_t NP1 = p->in->sizes[0];
+  MYFLT f = CS_ESR/(FL(2.0)*(NP1 - 1)),cf;
+  int32_t i;
+  cf = FL(0.0);
+  for (i=0; i < NP1; i++, cf+=f) {
+    a += in[i];
+    b += in[i]*cf;
+  }
+  *p->out = a > FL(0.0) ? b/a : FL(0.0);
+  return OK;
+}
+
+static int32_t array_centroid_i(CSOUND *csound, CENTR *p) {
+  if (UNLIKELY(array_centroid(csound, p) != OK))
+    return csound->InitError(csound, "%s",
+                            Str("centroid: expected at least two magnitude bins"));
+  return OK;
+}
+
+static int32_t array_centroid_k(CSOUND *csound, CENTR *p) {
+  if (UNLIKELY(array_centroid(csound, p) != OK))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("centroid: expected at least two magnitude bins"));
+  return OK;
+}
+
+typedef struct _inout {
+  OPDS H;
+  MYFLT *out, *in;
+} INOUT;
+
+static int32_t nxtpow2(CSOUND *csound, INOUT *p) {
+  double input = (double)*p->in;
+  if (UNLIKELY(!(input >= (double)INT32_MIN &&
+                 input < (double)INT32_MAX + 1.0)))
+    return csound->InitError(csound, "%s",
+                            Str("nxtpow2: input outside 32-bit integer range"));
+  int32_t inval = (int32_t)input;
+  /* Rounding a positive int32_t up can require the extra bit for 2^31. */
+  int64_t powtwo = 2;
+  while (powtwo < inval) powtwo *= 2;
+  *p->out = powtwo;
+  return OK;
+}
+
+
+typedef struct interl{
+  OPDS h;
+  ARRAYDAT *a;
+  ARRAYDAT *b;
+  ARRAYDAT *c;
+} INTERL;
+
+
+static int32_t interleave_i (CSOUND *csound, INTERL *p) {
+  if(p->b->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  if(p->c->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  if(p->b->dimensions == 1 &&
+     p->c->dimensions == 1 &&
+     p->a->dimensions <= 1 &&
+     p->b->sizes[0] == p->c->sizes[0]) {
+    int32_t len = p->b->sizes[0], i;
+    if (UNLIKELY(len > INT32_MAX/2))
+      return csound->InitError(csound, "%s", Str("interleave: array too large"));
+    if (UNLIKELY(tabinit(csound, p->a, len*2, p->h.insdshead) != OK))
+      return csound_array_init_resize_error(csound);
+    /* Work backwards and read each pair before writing to allow input reuse. */
+    for (i = len; i-- > 0;) {
+      MYFLT left = p->b->data[i], right = p->c->data[i];
+      p->a->data[2*i] = left;
+      p->a->data[2*i+1] = right;
+    }
+    return OK;
+  }
+  return csound->InitError(csound, "%s", Str("array inputs not in correct format\n"));
+}
+
+static int32_t interleave_perf (CSOUND *csound, INTERL *p) {
+  if (UNLIKELY(p->b->sizes == NULL || p->c->sizes == NULL ||
+               p->b->dimensions != 1 || p->c->dimensions != 1 ||
+               p->a->dimensions != 1 || p->b->sizes[0] != p->c->sizes[0]))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("interleave: expected equal-length one-dimensional inputs"));
+  int32_t len = p->b->sizes[0], i;
+  if (UNLIKELY(len > INT32_MAX/2))
+    return csound->PerfError(csound, &p->h, "%s", Str("interleave: array too large"));
+  if (UNLIKELY(tabcheck(csound, p->a, len*2, &p->h) != OK))
+    return NOTOK;
+  for (i = len; i-- > 0;) {
+    MYFLT left = p->b->data[i], right = p->c->data[i];
+    p->a->data[2*i] = left;
+    p->a->data[2*i+1] = right;
+  }
+  return OK;
+}
+
+static int32_t deinterleave_i (CSOUND *csound, INTERL *p) {
+  if(p->c->sizes == NULL)
+    return csound->InitError(csound, "array not initialised\n");
+  if(p->c->dimensions == 1) {
+    const CS_TYPE *arrayContainerType = csound->GetType(csound, "[");
+    ARRAYDAT preparedA = {0}, preparedB = {0};
+    int32_t len = p->c->sizes[0]/2, i,j;
+
+    if (UNLIKELY(p->a == p->b))
+      return csound->InitError(csound, "%s",
+                               Str("array outputs must be distinct"));
+    if (UNLIKELY(arrayContainerType == NULL ||
+                 arrayContainerType->freeVariableMemory == NULL))
+      return csound_array_init_resize_error(csound);
+    preparedA.arrayType = p->a->arrayType;
+    preparedB.arrayType = p->b->arrayType;
+    if (UNLIKELY(tabinit(csound, &preparedA, len,
+                         p->h.insdshead) != OK ||
+                 tabinit(csound, &preparedB, len,
+                         p->h.insdshead) != OK)) {
+      arrayContainerType->freeVariableMemory(csound, &preparedA);
+      arrayContainerType->freeVariableMemory(csound, &preparedB);
+      return csound_array_init_resize_error(csound);
+    }
+    for(i = 0, j = 0; i < len; i++,j+=2) {
+      preparedA.data[i] = p->c->data[j];
+      preparedB.data[i] = p->c->data[j+1];
+    }
+    arrayContainerType->freeVariableMemory(csound, p->a);
+    arrayContainerType->freeVariableMemory(csound, p->b);
+    *p->a = preparedA;
+    *p->b = preparedB;
+    return OK;
+  }
+  return csound->InitError(csound, "%s", Str("array inputs not in correct format\n"));
+}
+
+static int32_t deinterleave_perf (CSOUND *csound, INTERL *p) {
+  if (UNLIKELY(p->c->sizes == NULL || p->c->dimensions != 1 ||
+               p->a->dimensions != 1 || p->b->dimensions != 1))
+    return csound->PerfError(csound, &p->h, "%s",
+                            Str("deinterleave: expected one-dimensional arrays"));
+  int32_t len = p->c->sizes[0]/2, i,j;
+  if (UNLIKELY(tabcheck(csound, p->a, len, &p->h) != OK ||
+               tabcheck(csound, p->b, len, &p->h) != OK))
+    return NOTOK;
+  for(i = 0, j = 0; i < len; i++,j+=2) {
+    p->a->data[i] =  p->c->data[j];
+    p->b->data[i] = p->c->data[j+1];
+  }
+  return OK;
+}
+
+static OENTRY arrayvars_localops[] =
+  {
+    { "nxtpow2", sizeof(INOUT), 0, "i", "i", (SUBR)nxtpow2},
+    { "fft", sizeof(FFT), 0, ":Complex;[]",":Complex;[]o",
+      (SUBR) init_fft_complex, (SUBR) perf_fft_complex, NULL},
+    { "fft", sizeof(FFT), 0, ":Complex;[]","k[]",
+      (SUBR) init_fft_complex, (SUBR) perf_fft_complex, NULL},
+    { "fft", sizeof(FFT), 0, "k[]",":Complex;[]",
+      (SUBR) init_fft_complex, (SUBR) perf_fft_complex, NULL},
+    { "rfft", sizeof(FFT), 0, ":Complex;[]","k[]",
+      (SUBR) init_rfft_r2c, (SUBR) perf_rfft_r2c, NULL},
+    { "rifft", sizeof(FFT), 0, "k[]", ":Complex;[]",
+      (SUBR) init_rfft_c2r, (SUBR) perf_rfft_c2r, NULL},
+    { "rfft", sizeof(FFT), 0, "k[]","k[]",
+      (SUBR) init_rfft, (SUBR) perf_rfft, NULL},
+    {"rfft", sizeof(FFT), 0, "i[]","i[]",
+     (SUBR) rfft_i, NULL, NULL},
+    {"rifft", sizeof(FFT), 0, "k[]","k[]",
+     (SUBR) init_rifft, (SUBR) perf_rifft, NULL},
+    {"rifft", sizeof(FFT), 0, "i[]","i[]",
+     (SUBR) rifft_i, NULL, NULL},
+    {"cmplxprod", sizeof(FFT), 0, "k[]","k[]k[]",
+     (SUBR) init_rfftmult, (SUBR) perf_rfftmult, NULL},
+    {"fft", sizeof(FFT), 0, "k[]","k[]",
+     (SUBR) initialise_fft, (SUBR) perf_fft, NULL},
+    {"fft", sizeof(FFT), 0, "i[]","i[]",
+     (SUBR) fft_i, NULL, NULL},
+    /* Named inverse aliases for the typed fft(input, 1) forms. */
+    { "fftinv", sizeof(FFT), 0, ":Complex;[]", ":Complex;[]",
+      (SUBR) init_ifft_complex, (SUBR) perf_fft_complex, NULL},
+    { "fftinv", sizeof(FFT), 0, "k[]", ":Complex;[]",
+      (SUBR) init_ifft_complex, (SUBR) perf_fft_complex, NULL},
+    {"fftinv", sizeof(FFT), 0, "k[]","k[]",
+     (SUBR) init_ifft, (SUBR) perf_ifft, NULL},
+    {"fftinv", sizeof(FFT), 0, "i[]","i[]",
+     (SUBR) ifft_i, NULL, NULL},
+    {"rect2pol", sizeof(FFT), 0, "k[]","k[]",
+     (SUBR) init_recttopol, (SUBR) perf_recttopol, NULL},
+    {"pol2rect", sizeof(FFT), 0, "k[]","k[]",
+     (SUBR) init_recttopol, (SUBR) perf_poltorect, NULL},
+    {"pol2rect.AA", sizeof(FFT), 0, "k[]","k[]k[]",
+     (SUBR) init_poltorect2, (SUBR) perf_poltorect2, NULL},
+    {"mags", sizeof(FFT), 0, "k[]","k[]",
+     (SUBR) init_mags, (SUBR) perf_mags, NULL},
+    {"pows", sizeof(FFT), 0, "k[]","k[]",
+     (SUBR) init_mags, (SUBR) perf_pows, NULL},
+    {"phs", sizeof(FFT), 0, "k[]","k[]",
+     (SUBR) init_mags, (SUBR) perf_phs, NULL},
+    {"log", sizeof(FFT), 0, "k[]","k[]i",
+     (SUBR) init_logarray, (SUBR) perf_logarray, NULL},
+    {"r2c", sizeof(FFT), 0, "i[]","i[]",
+     (SUBR) rtoc_i, NULL, NULL},
+    {"r2c", sizeof(FFT), 0, "k[]","k[]",
+     (SUBR) init_rtoc, (SUBR) perf_rtoc, NULL},
+    {"c2r", sizeof(FFT), 0, "i[]","i[]",
+     (SUBR) ctor_i, NULL, NULL},
+    {"c2r", sizeof(FFT), 0, "k[]","k[]",
+     (SUBR) init_ctor, (SUBR) perf_ctor, NULL},
+    {"window", sizeof(FFT), 0, "k[]","k[]Op",
+     (SUBR) init_window, (SUBR) perf_window, NULL},
+    {"pvsceps", sizeof(PVSCEPS), 0, "k[]","fo",
+     (SUBR) pvsceps_init, (SUBR) pvsceps_perf, NULL},
+    {"cepsinv", sizeof(FFT), 0, "k[]","k[]",
+     (SUBR) init_iceps, (SUBR) perf_iceps, NULL},
+    {"ceps", sizeof(FFT), 0, "k[]","k[]k",
+     (SUBR) init_ceps, (SUBR) perf_ceps, NULL},
+    {"getrow", sizeof(FFT), 0, "i[]","i[]i",
+     (SUBR) rows_i, NULL, NULL},
+    {"getrow.S", sizeof(FFT), 0, "S[]","S[]k",
+     (SUBR) rows_init_S, (SUBR) rows_perf_S, NULL},
+    {"getrow", sizeof(FFT), 0, "k[]","k[]k",
+     (SUBR) rows_init, (SUBR) rows_perf, NULL},
+    {"getcol", sizeof(FFT), 0, "i[]","i[]i",
+     (SUBR) cols_i, NULL, NULL},
+    {"getcol", sizeof(FFT), 0, "k[]","k[]k",
+     (SUBR) cols_init, (SUBR) cols_perf, NULL},
+    {"getcol", sizeof(FFT), 0, "S[]","S[]k",
+     (SUBR) cols_init_S, (SUBR) cols_perf_S, NULL},
+    {"setrow", sizeof(FFT), 0, "i[]","i[]i",
+     (SUBR) set_rows_i, NULL, NULL},
+    {"setrow", sizeof(FFT), 0, "k[]","k[]k",
+     (SUBR) set_rows_init, (SUBR) set_rows_perf, NULL},
+    {"setrow.S", sizeof(FFT), 0, "S[]","S[]k",
+     (SUBR) set_rows_i, (SUBR) set_rows_perf, NULL},
+    {"setcol", sizeof(FFT), 0, "i[]","i[]i",
+     (SUBR) set_cols_i, NULL, NULL},
+    {"setcol", sizeof(FFT), 0, "k[]","k[]k",
+     (SUBR) set_cols_init, (SUBR) set_cols_perf, NULL},
+    {"setcol", sizeof(FFT), 0, "S[]","S[]k",
+     (SUBR) set_cols_i, (SUBR) set_cols_perf, NULL},
+    {"shiftin", sizeof(SHIFTIN), 0, "k[]","a",
+     (SUBR) shiftin_init, (SUBR) shiftin_perf},
+    {"shiftout", sizeof(SHIFTOUT), 0, "a","k[]o",
+     (SUBR) shiftout_init, (SUBR) shiftout_perf},
+    {"unwrap", sizeof(UNWRAP), 0, "k[]","k[]o",
+     (SUBR) unwrap_set, (SUBR) unwrap},
+    {"dct", sizeof(FFT), 0, "k[]","k[]",
+     (SUBR) init_dct, (SUBR) kdct, NULL},
+    {"dct", sizeof(FFT), 0, "i[]","i[]",
+     (SUBR) dct, NULL, NULL},
+    {"dctinv", sizeof(FFT), 0, "k[]","k[]",
+     (SUBR) init_dctinv, (SUBR) kdct, NULL},
+    {"dctinv", sizeof(FFT), 0, "i[]","i[]",
+     (SUBR)dctinv, NULL, NULL},
+    {"mfb", sizeof(MFB), 0, "k[]","k[]kki",
+     (SUBR) mfb_init, (SUBR) mfb, NULL},
+    {"mfb", sizeof(MFB), 0, "i[]","i[]iii",
+     (SUBR)mfbi, NULL, NULL},
+    {"centroid", sizeof(CENTR), 0, "i","i[]",
+     (SUBR) array_centroid_i, NULL, NULL},
+    {"centroid", sizeof(CENTR), 0, "k","k[]", NULL,
+     (SUBR)array_centroid_k, NULL},
+    {"interleave", sizeof(INTERL), 0, "i[]","i[]i[]",
+     (SUBR)interleave_i},
+    {"interleave", sizeof(INTERL), 0, "k[]","k[]k[]",
+     (SUBR)interleave_i, (SUBR) interleave_perf},
+    {"deinterleave", sizeof(INTERL), 0, "i[]i[]","i[]",
+     (SUBR)deinterleave_i},
+    {"deinterleave", sizeof(INTERL), 0, "k[]k[]","k[]",
+     (SUBR)deinterleave_i, (SUBR)deinterleave_perf},
+    { "autocorr", sizeof(AUTOCORR), 0, "k[]", "k[]",
+      (SUBR) init_autocorr, (SUBR) perf_autocorr },
+  };
+
+LINKAGE_BUILTIN(arrayvars_localops)
