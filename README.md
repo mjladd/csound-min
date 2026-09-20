@@ -8,8 +8,8 @@ WebAssembly, Bela, Daisy and Zynq, bindings for Java, Python and Lisp, and
 packaging for several systems. All of that is removed here. The engine, all
 1,821 opcodes and the analysis utilities are kept unchanged.
 
-Start with [ARCHITECTURE.md](ARCHITECTURE.md), a reading map of the engine.
-[BUILD.md](BUILD.md) has the build and the render commands.
+Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), a reading map of the engine.
+[docs/BUILD.md](docs/BUILD.md) has the build and the render commands.
 [src/tools/README.md](src/tools/README.md) records how the cut was made and how to
 prove that a change leaves the audio alone.
 
@@ -19,7 +19,7 @@ place to send patches. Send those to
 
 # INSTALLING
 
-This fork publishes no binaries. Build it from source. `BUILD.md` lists the
+This fork publishes no binaries. Build it from source. [docs/BUILD.md](docs/BUILD.md) lists the
 packages you need and the two commands that build it.
 
 Upstream Csound does publish prebuilt binaries for Linux on Intel, Windows and
@@ -41,7 +41,9 @@ C interface in `src/include/csound.h`.
 
 # LICENSE
 
-Csound is copyright (c) 1991-2024 The Csound Developers, see CONTRIBUTORS.
+Csound is copyright (c) 1991-2024 The Csound Developers. The full license
+text is in [docs/COPYING](docs/COPYING), and the contributor list is in
+[docs/AUTHORS](docs/AUTHORS) and under CONTRIBUTORS below.
 
 Csound is free software; you can redistribute it and/or modify it under the
 terms of the GNU Lesser General Public License as published by the Free

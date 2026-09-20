@@ -149,7 +149,7 @@ build time, so both tools must be installed.
 This is a pruned fork. It targets a Linux and macOS command line build and
 nothing else. It does not contain the mobile and web ports, the Java, Python
 and Lisp bindings, packaging, the translation catalogs, the `csbeats` score
-translator, or the `csdebugger` program. `src/tools/README.md` records how the
+translator, or the `csdebugger` program. [../src/tools/README.md](../src/tools/README.md) records how the
 cut was made and how to repeat it.
 
 One honest note on the result. The prune removed 923 files and 16 MB, but

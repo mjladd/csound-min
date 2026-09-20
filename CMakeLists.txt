@@ -1480,7 +1480,7 @@ endif()
 #include (InstallRequiredSystemLibraries)
 
 set (CPACK_PACKAGE_NAME "csound")
-set (CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/COPYING")
+set (CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/docs/COPYING")
 set (CPACK_PACKAGE_VERSION "7.0.0")
 set (CPACK_PACKAGE_VERSION_MAJOR "7")
 set (CPACK_PACKAGE_VERSION_MINOR "0")
@@ -1543,7 +1543,7 @@ endif()
 
 
 configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/csound.pc.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/csound.pc.in"
     "${CMAKE_CURRENT_BINARY_DIR}/csound.pc"
     @ONLY
 )

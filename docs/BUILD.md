@@ -102,7 +102,7 @@ python3 src/tools/difftest.py compare \
 
 The recording step renders each file twice and excludes the files that do not
 reproduce, so random number opcodes do not raise false alarms. See
-`src/tools/README.md` for the details.
+[../src/tools/README.md](../src/tools/README.md) for the details.
 
 ## If the build fails
 
