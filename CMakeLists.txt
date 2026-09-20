@@ -51,7 +51,6 @@ set(APIVERSION "${CS_VERSION}.${CS_SUBVER}")
 
 message(STATUS "Csound version: ${CS_VERSION}.${CS_SUBVER}.${CS_PATCHLEVEL}")
 
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/README.md.in ${CMAKE_CURRENT_SOURCE_DIR}/README.md)
 
 set(MACOSX_FRAMEWORK_BUNDLE_VERSION "${CS_VERSION}.${CS_SUBVER}.${CS_PATCHLEVEL}")
 set(MACOSX_FRAMEWORK_SHORT_VERSION_STRING "${CS_VERSION}.${CS_SUBVER}.${CS_PATCHLEVEL}")
@@ -1458,7 +1457,6 @@ add_subdirectory(Opcodes)
 add_subdirectory(InOut)
 add_subdirectory(Frontends)
 add_subdirectory(util)
-add_subdirectory(util1)
 add_subdirectory(tests/c)
 add_subdirectory(tests/commandline)
 add_subdirectory(tests/regression)
