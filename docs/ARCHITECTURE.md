@@ -27,7 +27,7 @@ src/Top/                the API surface and the performance loop
 src/util/               the analysis programs
 src/frontend/           the csound command
 src/tools/              the prune and render-comparison scripts
-tests/  doc/  samples/
+tests/  docs/  samples/
 ```
 
 Two consequences worth knowing. `src/include/` is the public API but it does
