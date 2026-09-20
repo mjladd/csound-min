@@ -61,6 +61,63 @@ To render without touching an audio device, always pass an output file with
 `-o`. Many `.csd` files in `tests/` ask for `-odac` in their own
 `<CsOptions>` block, and a command line flag overrides that.
 
+## Install it
+
+```
+sudo cmake --install build
+```
+
+The install writes the program, the library, the loadable back ends, the
+headers, the pkg-config and CMake files, and the HRTF data under
+`/usr/local`. After that, `csound` runs in any shell and finds its back ends
+without `OPCODE7DIR64`.
+
+Pass a prefix to install somewhere you own:
+
+```
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$HOME/.local"
+ninja -C build
+cmake --install build
+```
+
+Configure the prefix, as above, rather than passing `--prefix` to the install
+step alone. The library records the plugin directory at configure time, so a
+program installed under a prefix it was not configured for still looks for
+its back ends under the old one, and you have to set `OPCODE7DIR64` by hand.
+
+There is no uninstall target. `build/install_manifest.txt` lists every file
+the last install wrote, so remove them with:
+
+```
+sudo xargs rm -f < build/install_manifest.txt
+```
+
+## Build in a container
+
+`.devcontainer/` holds a development container with the dependencies above
+already installed, and a `csd` helper that builds, renders and plays. Open
+the repository in VS Code and run **Dev Containers: Reopen in Container**.
+[../.devcontainer/README.md](../.devcontainer/README.md) describes the two
+configurations, and how to reach the speakers of a Linux host from inside the
+container.
+
+## Pack a downloadable archive
+
+```
+.github/scripts/package.sh
+.github/scripts/verify-package.sh dist/*.tar.gz
+```
+
+The first command builds with AVX2 turned off, installs into a staging tree
+and writes `dist/csound-min-<version>-<os>-<arch>.tar.gz` with a checksum
+beside it. The second extracts that archive somewhere else and renders a file
+with it, which proves that the copy finds its own library and back ends.
+
+The `release` workflow in `.github/workflows/` runs both on a Linux runner
+and on a macOS runner, and attaches the archives to a GitHub release when you
+push a tag that starts with `v`.
+
 ## Options worth knowing
 
 The build defaults suit a workstation. These are the options to reach for

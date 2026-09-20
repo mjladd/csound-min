@@ -1,0 +1,52 @@
+// Development container for csound-min, with the audio hardware of a Linux
+// host. VS Code offers this configuration next to the default one.
+//
+// Pick this one to send audio straight to the speakers with 'csd play' and
+// 'csd live'. It needs a Linux host that runs PulseAudio or PipeWire, and it
+// fails to start on any other host. Pick the default configuration there and
+// render to a file instead.
+{
+  "name": "csound-min (host audio)",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+
+  // --device gives the container the ALSA devices. The bind mount gives it
+  // the socket of the sound server that owns them. The container user is
+  // uid 1000, so its socket path is /run/user/1000/pulse/native.
+  "runArgs": [
+    "--device=/dev/snd",
+    "--group-add=audio",
+    "--volume=${localEnv:XDG_RUNTIME_DIR}/pulse:/run/user/1000/pulse"
+  ],
+
+  "remoteEnv": {
+    "OPCODE7DIR64": "${containerWorkspaceFolder}/build",
+    "PATH": "${containerWorkspaceFolder}/.devcontainer/bin:${containerWorkspaceFolder}/build:${containerEnv:PATH}"
+  },
+
+  "postCreateCommand": ".devcontainer/postcreate.sh",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "kunstmusik.csound-vscode-plugin"
+      ],
+      "settings": {
+        "cmake.generator": "Ninja",
+        "cmake.buildDirectory": "${workspaceFolder}/build",
+        "cmake.configureArgs": ["-DCMAKE_BUILD_TYPE=Release"],
+        "cmake.sourceDirectory": "${workspaceFolder}",
+        "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+        "files.associations": {
+          "*.csd": "csound-csd",
+          "*.orc": "csound",
+          "*.sco": "csound-sco"
+        }
+      }
+    }
+  }
+}

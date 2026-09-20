@@ -1,0 +1,58 @@
+# Builds the engine on Linux and on macOS, and proves that the result renders
+# audio. The release workflow packs the downloadable archives.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            runner: ubuntu-latest
+          - name: macos
+            runner: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the build dependencies on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build flex bison \
+            libsndfile1-dev libsamplerate0-dev libcurl4-openssl-dev \
+            libasound2-dev libjack-jackd2-dev libpulse-dev portaudio19-dev
+
+      - name: Install the build dependencies on macOS
+        if: runner.os == 'macOS'
+        run: brew install ninja flex bison libsndfile libsamplerate portaudio
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: ninja -C build
+
+      - name: Render a test file
+        # The helper renders to a file and points the engine at the back ends
+        # in the build tree. Both are what a developer does by hand.
+        run: |
+          .devcontainer/bin/csd render tests/soak/oscil.csd
+          python3 .github/scripts/check-audio.py build/renders/oscil.wav
+
+      - name: Install into a temporary prefix
+        # The install rules are part of the build, so a break in them has to
+        # fail here and not in the release workflow.
+        run: |
+          cmake --install build --prefix "$RUNNER_TEMP/prefix"
+          test -x "$RUNNER_TEMP/prefix/bin/csound"

@@ -9,7 +9,9 @@ packaging for several systems. All of that is removed here. The engine, all
 1,821 opcodes and the analysis utilities are kept unchanged.
 
 Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), a reading map of the engine.
-[docs/BUILD.md](docs/BUILD.md) has the build and the render commands.
+[docs/BUILD.md](docs/BUILD.md) has the build, install and render commands.
+[.devcontainer/README.md](.devcontainer/README.md) has a container that builds and
+plays without installing anything on your own machine.
 [src/tools/README.md](src/tools/README.md) records how the cut was made and how to
 prove that a change leaves the audio alone.
 
@@ -19,8 +21,14 @@ place to send patches. Send those to
 
 # INSTALLING
 
-This fork publishes no binaries. Build it from source. [docs/BUILD.md](docs/BUILD.md) lists the
-packages you need and the two commands that build it.
+Take an archive for Linux on x86-64, or for macOS on Apple silicon, from the
+[releases page](https://github.com/mjladd/csound-min/releases). Extract it and
+read the `README.md` inside. Each archive holds the program, the library, the
+loadable back ends and the analysis utilities. A release workflow builds both
+archives and renders a file with each one before it publishes them.
+
+To build it yourself, [docs/BUILD.md](docs/BUILD.md) lists the packages you
+need, the two commands that build it, and the install step.
 
 Upstream Csound does publish prebuilt binaries for Linux on Intel, Windows and
 macOS. Take those from https://github.com/csound/csound/releases when you want
