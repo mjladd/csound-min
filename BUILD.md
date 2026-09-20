@@ -66,6 +66,21 @@ first.
 | `BUILD_TESTS` | OFF | Builds the C unit tests. |
 | `BUILD_PLUGINS` | OFF | Builds the optional opcodes as separate loadable plugins instead of linking them in. |
 
+## Default options in a file
+
+Csound 7 reads default command line options from a file called `.csound7rc`,
+not `.csoundrc` as version 6 did. It looks in three places, in this order: the
+path in `$CSOUND7RC`, then `$HOME/.csound7rc`, then `.csound7rc` in the current
+directory. See `check_options` in `Top/main.c` line 48.
+
+The file holds flags, and a line starting with a semicolon is a comment:
+
+```
+; suppress displays, colour-coded messages, no heartbeat, 16 bit WAV,
+; real-time output through PortAudio, 128 frame software buffer
+-d -m135 -H0 -s -W -o dac -+rtaudio=pa -b 128 -B 2048 --expression-opt
+```
+
 ## Prove that a change did not alter the audio
 
 `tools/difftest.py` renders a suite of `.csd` files and records one hash per

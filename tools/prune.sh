@@ -33,6 +33,32 @@ rm -f _codeql_detected_source_root
 say "step 5: extra frontend programs"
 rm -rf Frontends/beats Frontends/debugger
 
+say "step 5b: legacy score tools, Tcl widgets and dead CI"
+rm -rf util1 util2 .github azure-pipelines.yml .travis.yml nsliders.tk
+
+say "step 5c: unreferenced files at the repository root"
+# longline.c and its file list are a line-length helper in no build.
+# INSTALLING points at releases this fork does not publish.
+# README.md.in is a template CMake used to overwrite README.md.
+rm -f longline.c all_string_files INSTALLING README.md.in
+rm -rf Release_Notes doc/How_to_Build_Csound_on_Windows.doc
+# etc holds a 2012 ChangeLog and a .csoundrc sample. Csound 7 reads
+# .csound7rc from $HOME or the current directory, never from etc.
+rm -rf etc
+
+say "step 5d: stop CMake overwriting README.md from its template"
+python3 - <<'PY_INNER'
+import pathlib
+p = pathlib.Path("CMakeLists.txt")
+text = p.read_text()
+line = ("configure_file(${CMAKE_CURRENT_SOURCE_DIR}/README.md.in "
+        "${CMAKE_CURRENT_SOURCE_DIR}/README.md)\n")
+if line not in text:
+    raise SystemExit("CMakeLists.txt: README configure_file rule not found")
+p.write_text(text.replace(line, ""))
+print("removed the README.md configure_file rule")
+PY_INNER
+
 say "step 6: audio back ends for other systems"
 rm -f InOut/rtwinmm.c InOut/rtwasapi.c \
       InOut/rthaiku.cpp InOut/HaikuAudio.cpp InOut/HaikuMidi.cpp
@@ -42,7 +68,7 @@ python3 - <<'PY'
 import re, pathlib
 p = pathlib.Path("CMakeLists.txt")
 text = p.read_text()
-for name in ("Python", "Bela", "po", "tests/python"):
+for name in ("Python", "Bela", "po", "tests/python", "util1"):
     text = re.sub(r"^add_subdirectory\(%s\)[ \t]*\r?\n" % re.escape(name),
                   "", text, flags=re.M)
 p.write_text(text)
@@ -90,7 +116,6 @@ python3 "$PRUNER" \
     Opcodes/CMakeLists.txt \
     Frontends/CMakeLists.txt \
     util/CMakeLists.txt \
-    util1/CMakeLists.txt \
     include/CMakeLists.txt \
     tests/c/CMakeLists.txt \
     tests/commandline/CMakeLists.txt \

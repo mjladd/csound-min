@@ -64,7 +64,7 @@ strings, and the three function pointers. `Engine/entry.c` line 78 opens
 | `InOut/` | 18,401 | Real-time audio and MIDI back ends, sound file reading and writing, and the built-in graph display. |
 | `include/` | 10,965 | Public headers. `csound.h` is the API, 127 functions. `csoundCore.h` is the internal one, and it holds the `CSOUND` struct. |
 | `H/` | 10,717 | Internal headers, mostly per-opcode state structure definitions. |
-| `util/`, `util1/` | 18,652 | Standalone analysis programs: `pvanal`, `hetro`, `lpanal`, `atsa`, `dnoise`, `srconv`. Reachable as `csound -U <name>`. |
+| `util/` | 15,681 | Standalone analysis programs: `pvanal`, `hetro`, `lpanal`, `atsa`, `dnoise`, `srconv`. Also built as the `stdutil` plugin, which is what `csound -U <name>` loads. |
 | `tests/` | 17,134 | The test suites, plus 1,678 `.csd` files. |
 
 ## How one note becomes sound
