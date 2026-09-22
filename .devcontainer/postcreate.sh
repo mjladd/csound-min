@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs once, when the container is created. It configures the build tree and
 # says what to do next. It does not compile, because the first build takes a
-# few minutes on a small machine and you may want other options first.
+# few minutes on a small machine and you may want other options first. The
+# released csound in the image renders .csd files until you build.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -24,11 +25,12 @@ cmake -S . -B build -G Ninja \
 
 cat <<'NEXT'
 
-The build tree is configured. Next:
+The build tree is configured. The csound on your PATH is the released one
+until you build. Next:
 
-    ninja -C build           # compile the library, the program and the utilities
     csd render tests/soak/oscil.csd
     csd play tests/soak/oscil.csd
+    ninja -C build           # compile the library, the program and the utilities
 
 Run 'csd help' for the other subcommands.
 NEXT

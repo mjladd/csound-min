@@ -12,6 +12,13 @@ libsamplerate, libcurl, and the ALSA, JACK, PulseAudio, PipeWire and
 PortAudio development packages. It also carries `gdb`, `ccache`, `python3`
 for `src/tools/difftest.py`, and `sox` to inspect and play the rendered audio.
 
+The image also holds a released csound-min in `/usr/local`, so you can render
+`.csd` files before you build the engine. The `Dockerfile` pins the release
+with `CSOUND_MIN_RELEASE` and `CSOUND_MIN_SHA256`. To move to a newer
+release, change both values and rebuild the container. The release holds a
+Linux x86_64 archive only. On an ARM host, such as a Mac with Apple silicon,
+the image has no released csound, and you build before you render.
+
 ## Start it
 
 Open the folder in VS Code and run **Dev Containers: Reopen in Container**.
@@ -26,13 +33,21 @@ VS Code offers two configurations:
 
 The first start builds the image, which takes a few minutes. After that,
 `postcreate.sh` configures the build tree and prints the next commands. It
-does not compile. Run `ninja -C build` yourself.
+does not compile. The released csound renders `.csd` files right away. Run
+`ninja -C build` when you change the engine.
 
 ## The csd helper
 
-The container puts `.devcontainer/bin/csd` and the `build` directory on your
+The container puts `.devcontainer/bin` and the `build` directory on your
 PATH, and it sets `OPCODE7DIR64` to the build tree. The engine then finds its
 loadable back ends without an install.
+
+`.devcontainer/bin` holds two programs. `csd` is the helper below. `csound`
+is a wrapper that runs `build/csound` when it exists, and the released
+`/usr/local/bin/csound` until then. The wrapper also sets `OPCODE7DIR64` for
+the csound it picks, so the released csound does not load the back ends of
+your build. `csd render`, `csd play`, `csd live` and `csd opcodes` use the
+wrapper. `csd difftest` always uses your build, because it tests the engine.
 
 ```
 csd build                      # compile everything
@@ -52,7 +67,6 @@ device.
 You can also call the program directly:
 
 ```
-ninja -C build
 csound -W -o out.wav tests/soak/oscil.csd
 ```
 

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# csound - run the csound you built, or the released one until you build.
+#
+# The container sets OPCODE7DIR64 to the build tree. The released csound in
+# /usr/local finds its own back ends only when that variable is unset.
+set -euo pipefail
+
+self=$(readlink -f "$0")
+root=$(cd "$(dirname "$self")/../.." && pwd)
+build=${CSOUND_BUILD_DIR:-$root/build}
+
+if [ -x "$build/csound" ]; then
+    OPCODE7DIR64=$build exec "$build/csound" "$@"
+elif [ -x /usr/local/bin/csound ]; then
+    unset OPCODE7DIR64
+    exec /usr/local/bin/csound "$@"
+else
+    echo "csound: no csound yet. Run 'ninja -C build' or 'csd build'." >&2
+    exit 127
+fi
