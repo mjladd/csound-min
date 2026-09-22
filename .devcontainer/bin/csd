@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # csd - build csound-min and run .csd files with it.
 #
-# The helper always uses the csound you just built, and it points the engine
-# at the loadable back ends in the build tree. Run 'csd help' for the
-# subcommands.
+# The helper uses the csound you built, with the loadable back ends in the
+# build tree. Until you build, it uses the released csound in /usr/local.
+# Run 'csd help' for the subcommands.
 set -euo pipefail
 
 self=$(readlink -f "$0")
 root=$(cd "$(dirname "$self")/../.." && pwd)
 build=${CSOUND_BUILD_DIR:-$root/build}
 renders=$build/renders
+csound=$root/.devcontainer/bin/csound
 
 usage() {
     cat <<'TEXT'
@@ -24,8 +25,9 @@ usage: csd <command> [arguments]
   difftest                   compare the renders against the recorded baseline
   help                       print this text
 
-The rendered files go to build/renders. Set CSOUND_BUILD_DIR to use another
-build tree.
+The rendered files go to build/renders. Until you build, render, play, live
+and opcodes use the released csound in /usr/local. difftest always uses your
+build. Set CSOUND_BUILD_DIR to use another build tree.
 TEXT
 }
 
@@ -33,6 +35,14 @@ need_build() {
     if [ ! -x "$build/csound" ]; then
         echo "csd: $build/csound is missing. Building it now." >&2
         cmd_build
+    fi
+}
+
+# The csound wrapper picks the build or the release. Build only when there
+# is neither.
+need_csound() {
+    if [ ! -x "$build/csound" ] && [ ! -x /usr/local/bin/csound ]; then
+        need_build
     fi
 }
 
@@ -47,9 +57,9 @@ cmd_build() {
 # most .csd files carry in their own <CsOptions> block.
 render_to() {
     local input=$1 output=$2
-    need_build
+    need_csound
     mkdir -p "$(dirname "$output")"
-    OPCODE7DIR64=$build "$build/csound" -W -o "$output" "$input"
+    "$csound" -W -o "$output" "$input"
 }
 
 default_output() {
@@ -89,8 +99,8 @@ play_file() {
 
 cmd_live() {
     [ $# -ge 1 ] || { usage; exit 2; }
-    need_build
-    OPCODE7DIR64=$build "$build/csound" -odac "$@"
+    need_csound
+    "$csound" -odac "$@"
 }
 
 cmd_info() {
@@ -105,11 +115,11 @@ cmd_info() {
 }
 
 cmd_opcodes() {
-    need_build
+    need_csound
     if [ $# -ge 1 ]; then
-        OPCODE7DIR64=$build "$build/csound" -z1 2>&1 | grep -i -- "$1"
+        "$csound" -z1 2>&1 | grep -i -- "$1"
     else
-        OPCODE7DIR64=$build "$build/csound" -z1 2>&1
+        "$csound" -z1 2>&1
     fi
 }
 

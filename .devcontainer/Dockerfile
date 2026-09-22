@@ -2,7 +2,8 @@
 #
 # The base image carries git, curl, zsh, sudo and a non-root "vscode" user.
 # Everything added here is either a build dependency from docs/BUILD.md, a
-# tool for working with the rendered audio, or a debugger.
+# tool for working with the rendered audio, a debugger, or a released
+# csound-min that runs before you build your own.
 FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -37,3 +38,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN printf 'pcm.!default pulse\nctl.!default pulse\n' > /etc/asound.conf \
  && printf 'default-server = unix:/run/user/1000/pulse/native\nautospawn = no\ndaemon-binary = /bin/true\n' \
     > /etc/pulse/client.conf
+
+# A released csound-min goes into /usr/local, so that you can render .csd
+# files before you build the engine. After 'ninja -C build', the csound
+# wrapper in .devcontainer/bin runs your build instead. The release holds a
+# Linux x86_64 archive only, so on any other processor you build first.
+# To move to a newer release, change both values.
+ARG CSOUND_MIN_RELEASE=v7.0.0-min.2
+ARG CSOUND_MIN_SHA256=16969718e2ee7b96fe1dd9ac64d382ea56f773428fe31f6a62f771e83340dfc6
+RUN if [ "$(dpkg --print-architecture)" = amd64 ]; then \
+        name=csound-min-${CSOUND_MIN_RELEASE#v}-linux-x86_64 \
+     && curl -fsSL -o /tmp/$name.tar.gz \
+        https://github.com/mjladd/csound-min/releases/download/$CSOUND_MIN_RELEASE/$name.tar.gz \
+     && echo "$CSOUND_MIN_SHA256  /tmp/$name.tar.gz" | sha256sum -c - \
+     && tar -xzf /tmp/$name.tar.gz -C /tmp \
+     && cp -a /tmp/$name/bin /tmp/$name/lib /tmp/$name/include /tmp/$name/share /usr/local/ \
+     && rm -rf /tmp/$name /tmp/$name.tar.gz \
+     && ldconfig; \
+    else \
+        echo "No csound-min release for $(dpkg --print-architecture). Build it in the container."; \
+    fi
