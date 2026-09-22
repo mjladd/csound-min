@@ -65,6 +65,52 @@ jobs:
             dist/*.sha256
           if-no-files-found: error
 
+  linux-arm64:
+    name: linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    # The same older distribution as the x86_64 job, on an ARM runner. A Mac
+    # with Apple silicon runs ARM containers, so the workspace image needs
+    # this archive.
+    container: ubuntu:22.04
+
+    steps:
+      - name: Install the build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git python3 \
+            build-essential cmake ninja-build pkg-config flex bison \
+            libsndfile1-dev libsamplerate0-dev libcurl4-openssl-dev \
+            libasound2-dev libjack-jackd2-dev libpulse-dev portaudio19-dev
+
+      - uses: actions/checkout@v4
+        with:
+          # package.sh names the archive after the tag, which it reads with
+          # git describe. That needs the whole history.
+          fetch-depth: 0
+
+      - name: Let git read the checkout
+        # The checkout belongs to another user inside the container, and git
+        # refuses to read a repository it does not trust. Without this, the
+        # archive loses the tag in its name and the program reports no commit.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build and pack
+        run: .github/scripts/package.sh
+
+      - name: Prove that the archive runs after extraction
+        run: .github/scripts/verify-package.sh dist/*.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: csound-min-linux-aarch64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
   macos:
     name: macos-arm64
     runs-on: macos-latest
@@ -91,9 +137,54 @@ jobs:
             dist/*.sha256
           if-no-files-found: error
 
+  image:
+    name: workspace image
+    needs: [linux, linux-arm64]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect the Linux archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: csound-min-linux-*
+          merge-multiple: true
+
+      - name: Build for this processor and render with it
+        # The script builds the image and renders a test file in it. A break
+        # here stops the push below.
+        run: .github/scripts/build-workspace-image.sh csound-min-workspace:test
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build for both processors and push
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          image=ghcr.io/${{ github.repository_owner }}/csound-min-workspace
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --file container/workspace/Dockerfile \
+            --tag "$image:${TAG#v}" \
+            --tag "$image:latest" \
+            --push .
+
   publish:
     name: publish the release
-    needs: [linux, macos]
+    needs: [linux, linux-arm64, macos]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
 
@@ -106,6 +197,8 @@ jobs:
       - name: Write the release notes
         env:
           COMMIT: ${{ github.sha }}
+          OWNER: ${{ github.repository_owner }}
+          TAG: ${{ github.ref_name }}
         run: |
           cat > notes.md <<NOTES
           Built from $COMMIT.
@@ -115,6 +208,11 @@ jobs:
           Extract it and read README.md inside. You either source env.sh to
           run the program from the extracted directory, or copy the files
           into /usr/local.
+
+          To write .csd files without building the engine, open your project
+          in the workspace container image:
+
+              ghcr.io/$OWNER/csound-min-workspace:${TAG#v}
 
           This is a personal learning fork of Csound. For a supported build,
           take a release from https://github.com/csound/csound/releases.

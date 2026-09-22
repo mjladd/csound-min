@@ -1,0 +1,5 @@
+# The workspace image needs the release archives and the csd helper only.
+# Everything else stays out of the build context.
+*
+!dist/*.tar.gz
+!.devcontainer/bin/csd

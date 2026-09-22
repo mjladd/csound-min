@@ -3,7 +3,9 @@
 # The base image carries git, curl, zsh, sudo and a non-root "vscode" user.
 # Everything added here is either a build dependency from docs/BUILD.md, a
 # tool for working with the rendered audio, a debugger, or a released
-# csound-min that runs before you build your own.
+# csound-min that runs before you build your own. libasound2-plugins is the
+# ALSA plugin package. Without it, ALSA cannot use the pulse device that
+# /etc/asound.conf names below.
 FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -22,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsamplerate0-dev \
     libcurl4-openssl-dev \
     libasound2-dev \
+    libasound2-plugins \
     libjack-jackd2-dev \
     libpulse-dev \
     libpipewire-0.3-dev \
@@ -41,20 +44,30 @@ RUN printf 'pcm.!default pulse\nctl.!default pulse\n' > /etc/asound.conf \
 
 # A released csound-min goes into /usr/local, so that you can render .csd
 # files before you build the engine. After 'ninja -C build', the csound
-# wrapper in .devcontainer/bin runs your build instead. The release holds a
-# Linux x86_64 archive only, so on any other processor you build first.
-# To move to a newer release, change both values.
+# wrapper in .devcontainer/bin runs your build instead.
+#
+# To move to a newer release, change the tag and both checksums. A checksum
+# is in the .sha256 file next to the archive on the release page. An empty
+# checksum means that the release has no archive for that processor, and you
+# then build the engine in the container before you render.
 ARG CSOUND_MIN_RELEASE=v7.0.0-min.2
-ARG CSOUND_MIN_SHA256=16969718e2ee7b96fe1dd9ac64d382ea56f773428fe31f6a62f771e83340dfc6
-RUN if [ "$(dpkg --print-architecture)" = amd64 ]; then \
-        name=csound-min-${CSOUND_MIN_RELEASE#v}-linux-x86_64 \
+ARG CSOUND_MIN_SHA256_AMD64=16969718e2ee7b96fe1dd9ac64d382ea56f773428fe31f6a62f771e83340dfc6
+ARG CSOUND_MIN_SHA256_ARM64=
+RUN arch=$(dpkg --print-architecture) \
+ && case "$arch" in \
+        amd64) machine=x86_64;  sha=$CSOUND_MIN_SHA256_AMD64 ;; \
+        arm64) machine=aarch64; sha=$CSOUND_MIN_SHA256_ARM64 ;; \
+        *)     machine=;        sha= ;; \
+    esac \
+ && if [ -z "$sha" ]; then \
+        echo "No csound-min release archive for $arch. Build it in the container."; \
+    else \
+        name=csound-min-${CSOUND_MIN_RELEASE#v}-linux-$machine \
      && curl -fsSL -o /tmp/$name.tar.gz \
         https://github.com/mjladd/csound-min/releases/download/$CSOUND_MIN_RELEASE/$name.tar.gz \
-     && echo "$CSOUND_MIN_SHA256  /tmp/$name.tar.gz" | sha256sum -c - \
+     && echo "$sha  /tmp/$name.tar.gz" | sha256sum -c - \
      && tar -xzf /tmp/$name.tar.gz -C /tmp \
      && cp -a /tmp/$name/bin /tmp/$name/lib /tmp/$name/include /tmp/$name/share /usr/local/ \
      && rm -rf /tmp/$name /tmp/$name.tar.gz \
      && ldconfig; \
-    else \
-        echo "No csound-min release for $(dpkg --print-architecture). Build it in the container."; \
     fi
