@@ -4,6 +4,22 @@ The container holds everything the build needs, so you do not install audio
 libraries on your own machine. It targets two kinds of work: changing the C
 engine, and writing `.csd` files and listening to them.
 
+## Which container
+
+This container is for work on the engine. It holds the compiler, the engine
+source and a released csound-min to render with before you build.
+
+For music alone, use the workspace image instead. It holds the released
+engine, the `csd` helper and the audio tools, and no compiler:
+
+```
+ghcr.io/mjladd/csound-min-workspace:latest
+```
+
+Name that image in the `.devcontainer/devcontainer.json` of your own music
+repository. `container/workspace/Dockerfile` builds it, and the release
+workflow publishes one image for each release.
+
 ## What is inside
 
 The image is Ubuntu 24.04 with the build dependencies from
@@ -33,8 +49,8 @@ VS Code offers two configurations:
 
 The first start builds the image, which takes a few minutes. After that,
 `postcreate.sh` configures the build tree and prints the next commands. It
-does not compile. The released csound renders `.csd` files right away. Run
-`ninja -C build` when you change the engine.
+does not compile. The released csound renders `.csd` files right away. When
+you change the engine, run `ninja -C build`.
 
 ## The csd helper
 
@@ -43,11 +59,17 @@ PATH, and it sets `OPCODE7DIR64` to the build tree. The engine then finds its
 loadable back ends without an install.
 
 `.devcontainer/bin` holds two programs. `csd` is the helper below. `csound`
-is a wrapper that runs `build/csound` when it exists, and the released
-`/usr/local/bin/csound` until then. The wrapper also sets `OPCODE7DIR64` for
-the csound it picks, so the released csound does not load the back ends of
-your build. `csd render`, `csd play`, `csd live` and `csd opcodes` use the
-wrapper. `csd difftest` always uses your build, because it tests the engine.
+is a wrapper. If `build/csound` exists, the wrapper runs it. If not, the
+wrapper runs the released `/usr/local/bin/csound`. The wrapper sets
+`OPCODE7DIR64` for the csound it picks, so the released csound does not load
+the back ends of your build. `csd` makes the same choice for itself.
+
+`csd` has two modes. In this repository it is in engine mode: it can build,
+it can run `csd difftest`, and the rendered files go to `build/renders`. In
+the workspace image it is in workspace mode: the engine is the released one,
+the rendered files go to `renders/` in your project, and `csd build` and
+`csd difftest` stop with a message. `csd difftest` always uses your build,
+because it tests the engine.
 
 ```
 csd build                      # compile everything
@@ -57,6 +79,7 @@ csd live tests/soak/oscil.csd  # straight to the audio device
 csd info build/renders/oscil.wav
 csd opcodes oscil              # list the opcodes that match
 csd difftest                   # compare the renders against the baseline
+csd analyze                    # run analysis/make.sh of a music project
 ```
 
 `csd render` and `csd play` write to `build/renders`. They pass `-o`, which

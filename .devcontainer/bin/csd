@@ -1,16 +1,65 @@
 #!/usr/bin/env bash
-# csd - build csound-min and run .csd files with it.
+# csd - render .csd files, and build csound-min when you work on the engine.
 #
-# The helper uses the csound you built, with the loadable back ends in the
-# build tree. Until you build, it uses the released csound in /usr/local.
+# The helper runs in one of two modes.
+#
+# Engine mode: it runs from a csound-min checkout, or CSOUND_BUILD_DIR names a
+# build tree. It uses the csound you built, with the loadable back ends in the
+# build tree, and it can build. Until you build, it uses the released csound.
+#
+# Workspace mode: it runs anywhere else, for example in the workspace image of
+# a music project. It uses the released csound in /usr/local, and it cannot
+# build or run the difference test.
+#
 # Run 'csd help' for the subcommands.
 set -euo pipefail
 
 self=$(readlink -f "$0")
-root=$(cd "$(dirname "$self")/../.." && pwd)
-build=${CSOUND_BUILD_DIR:-$root/build}
-renders=$build/renders
-csound=$root/.devcontainer/bin/csound
+release=/usr/local/bin/csound
+
+# A csound-min checkout, and not any other folder.
+is_checkout() {
+    [ -n "$1" ] && [ -f "$1/CMakeLists.txt" ] && [ -d "$1/src/Engine" ]
+}
+
+git_root() {
+    git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true
+}
+
+# The helper sits in .devcontainer/bin of a checkout, or in /usr/local/bin of
+# the workspace image. The current folder can also be in a checkout.
+find_checkout() {
+    local candidate
+    for candidate in "$(cd "$(dirname "$self")/../.." && pwd)" "$(git_root)"; do
+        if is_checkout "$candidate"; then
+            echo "$candidate"
+            return
+        fi
+    done
+}
+
+checkout=$(find_checkout)
+
+if [ -n "${CSOUND_BUILD_DIR:-}" ]; then
+    mode=engine
+    build=$CSOUND_BUILD_DIR
+    root=${checkout:-$PWD}
+elif [ -n "$checkout" ]; then
+    mode=engine
+    root=$checkout
+    build=$root/build
+else
+    mode=workspace
+    root=$(git_root)
+    root=${root:-$PWD}
+    build=""
+fi
+
+if [ "$mode" = engine ]; then
+    renders=$build/renders
+else
+    renders=$root/renders
+fi
 
 usage() {
     cat <<'TEXT'
@@ -20,46 +69,60 @@ usage: csd <command> [arguments]
   render FILE.csd [OUT.wav]  render to a file, ignoring -odac in the .csd
   play FILE.csd              render, then play the result
   live FILE.csd              send the audio straight to the audio device
+  analyze                    run analysis/make.sh, which makes the analysis files
   info FILE.wav              print the format, the length and the peak level
-  opcodes [PATTERN]          list the opcodes the build provides
+  opcodes [PATTERN]          list the opcodes the engine provides
   difftest                   compare the renders against the recorded baseline
   help                       print this text
 
-The rendered files go to build/renders. Until you build, render, play, live
-and opcodes use the released csound in /usr/local. difftest always uses your
-build. Set CSOUND_BUILD_DIR to use another build tree.
+In a csound-min checkout, the rendered files go to build/renders, and the
+engine is the one you built. Set CSOUND_BUILD_DIR to use another build tree.
+Anywhere else, the rendered files go to renders/ in your project, the engine
+is the released one in /usr/local, and build and difftest do not run.
 TEXT
 }
 
+engine_only() {
+    echo "csd: '$1' needs a csound-min checkout." >&2
+    echo "csd: this is $release, the released engine." >&2
+    exit 2
+}
+
 need_build() {
+    [ "$mode" = engine ] || engine_only build
     if [ ! -x "$build/csound" ]; then
         echo "csd: $build/csound is missing. Building it now." >&2
         cmd_build
     fi
 }
 
-# The csound wrapper picks the build or the release. Build only when there
-# is neither.
-need_csound() {
-    if [ ! -x "$build/csound" ] && [ ! -x /usr/local/bin/csound ]; then
-        need_build
-    fi
-}
-
 cmd_build() {
+    [ "$mode" = engine ] || engine_only build
     if [ ! -f "$build/CMakeCache.txt" ]; then
         cmake -S "$root" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release
     fi
     ninja -C "$build" "$@"
 }
 
+# Runs the csound you built, or the released one until you build. Each engine
+# needs its own loadable back ends, so the plugin folder follows the choice.
+run_csound() {
+    if [ -n "$build" ] && [ -x "$build/csound" ]; then
+        OPCODE7DIR64=$build "$build/csound" "$@"
+    elif [ -x "$release" ]; then
+        env -u OPCODE7DIR64 "$release" "$@"
+    else
+        need_build
+        OPCODE7DIR64=$build "$build/csound" "$@"
+    fi
+}
+
 # Renders to a file. A -o flag on the command line overrides the -odac that
 # most .csd files carry in their own <CsOptions> block.
 render_to() {
     local input=$1 output=$2
-    need_csound
     mkdir -p "$(dirname "$output")"
-    "$csound" -W -o "$output" "$input"
+    run_csound -W -o "$output" "$input"
 }
 
 default_output() {
@@ -99,8 +162,18 @@ play_file() {
 
 cmd_live() {
     [ $# -ge 1 ] || { usage; exit 2; }
-    need_csound
-    "$csound" -odac "$@"
+    run_csound -odac "$@"
+}
+
+# The analysis files of a music project come from its samples. The project
+# keeps the commands in one script, so that anybody can make them again.
+cmd_analyze() {
+    local script=$root/analysis/make.sh
+    if [ ! -f "$script" ]; then
+        echo "csd: $script is missing, so there is nothing to make." >&2
+        return 1
+    fi
+    ( cd "$root" && bash "$script" "$@" )
 }
 
 cmd_info() {
@@ -115,15 +188,15 @@ cmd_info() {
 }
 
 cmd_opcodes() {
-    need_csound
     if [ $# -ge 1 ]; then
-        "$csound" -z1 2>&1 | grep -i -- "$1"
+        run_csound -z1 2>&1 | grep -i -- "$1"
     else
-        "$csound" -z1 2>&1
+        run_csound -z1 2>&1
     fi
 }
 
 cmd_difftest() {
+    [ "$mode" = engine ] || engine_only difftest
     need_build
     python3 "$root/src/tools/difftest.py" compare \
         --csound "$build/csound" --plugin-dir "$build" \
@@ -139,6 +212,7 @@ case $command in
     render)   cmd_render "$@" ;;
     play)     cmd_play "$@" ;;
     live)     cmd_live "$@" ;;
+    analyze)  cmd_analyze "$@" ;;
     info)     cmd_info "$@" ;;
     opcodes)  cmd_opcodes "$@" ;;
     difftest) cmd_difftest "$@" ;;
