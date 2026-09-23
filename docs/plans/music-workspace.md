@@ -1,12 +1,13 @@
 # Plan: a container for Csound music projects
 
-Status: 2026-09-23. Steps 1, 2, 3, 4, 5 and 7 are done. Step 6 is open.
+Status: 2026-09-23. Every step is done.
 
 - Steps 1, 2, 3, 4 and 7 went in with pull request #10, and the dev container
   moved to the new release with pull request #11.
 - Release v7.0.0-min.3 carries a Linux ARM archive, and it published
   `ghcr.io/mjladd/csound-min-workspace`.
-- The template repository is `mjladd/csound-min-template`.
+- The template repository is `mjladd/csound-min-template`, and it watches
+  csound-min for a new release.
 - Two changes below differ from the first version of this plan. The first
   piece uses synthesis alone, and the template has no render workflow. The
   text of steps 5 and 6 says why.
@@ -181,8 +182,19 @@ run `csd render pieces/hello.csd`. Do the same in a GitHub Codespace.
 
 ### 6. Keep the template current
 
-Add a step to the release workflow that opens a pull request on the template
-to change the image tag. Or change the tag by hand after each release.
+The template watches csound-min, and csound-min does not push to the
+template. A job in the release workflow needs a token with write access to
+the other repository. A check inside the template needs no token.
+
+`.github/workflows/engine-update.yml` in the template runs every Monday, and
+it runs by hand from the Actions tab. It reads the newest csound-min
+release. If the tag differs from the one in the two dev container
+configurations, it opens a pull request that changes both.
+
+The template repository also needs one setting: Actions, General, Allow
+GitHub Actions to create and approve pull requests. Without it, the workflow
+stops with "GitHub Actions is not permitted to create or approve pull
+requests".
 
 The template held a render workflow at first, which rendered every file in
 `pieces/` on each push. It is out again. A piece renders in the container in
