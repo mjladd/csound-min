@@ -50,9 +50,9 @@ RUN printf 'pcm.!default pulse\nctl.!default pulse\n' > /etc/asound.conf \
 # is in the .sha256 file next to the archive on the release page. An empty
 # checksum means that the release has no archive for that processor, and you
 # then build the engine in the container before you render.
-ARG CSOUND_MIN_RELEASE=v7.0.0-min.3
-ARG CSOUND_MIN_SHA256_AMD64=dcfcb04f18d075796ba090d679fe33040d1b985ce3fbf599d3d8800fb7bfcf9d
-ARG CSOUND_MIN_SHA256_ARM64=f18636b406b39ea1fcffc95c5d288dfcd6c68295993aad8209d27f6a71ae66d3
+ARG CSOUND_MIN_RELEASE=v7.0.0-min.4
+ARG CSOUND_MIN_SHA256_AMD64=29f28a92d7a2bc78dadcb4be330b6834cfd1fb82b044471a1cbd8a302b7e8858
+ARG CSOUND_MIN_SHA256_ARM64=0d2fd9c5637367d60e464e537a26d4097758a732ecc46e2058a238fee9157baf
 RUN arch=$(dpkg --print-architecture) \
  && case "$arch" in \
         amd64) machine=x86_64;  sha=$CSOUND_MIN_SHA256_AMD64 ;; \
