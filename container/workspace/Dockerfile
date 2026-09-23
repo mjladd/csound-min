@@ -12,7 +12,9 @@ FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
 ARG DEBIAN_FRONTEND=noninteractive
 
 # The run time libraries are the ones that the archive README lists, plus the
-# ALSA plugin package. Without that package, ALSA cannot use the pulse device
+# ALSA plugin package and git-lfs. A music project keeps its samples in Git
+# LFS, and neither a clone in the container nor actions/checkout works
+# without that program. Without that package, ALSA cannot use the pulse device
 # that /etc/asound.conf names below, and every render that opens an audio
 # device fails.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sox \
     libsox-fmt-all \
     python3 \
+    git-lfs \
  && rm -rf /var/lib/apt/lists/*
 
 # The image renders to a file by default. When you mount the host audio
