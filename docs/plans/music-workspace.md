@@ -1,6 +1,15 @@
 # Plan: a container for Csound music projects
 
-Status: proposal, 2026-09-22.
+Status: 2026-09-23. Steps 1, 2, 3, 4, 5 and 7 are done. Step 6 is open.
+
+- Steps 1, 2, 3, 4 and 7 went in with pull request #10, and the dev container
+  moved to the new release with pull request #11.
+- Release v7.0.0-min.3 carries a Linux ARM archive, and it published
+  `ghcr.io/mjladd/csound-min-workspace`.
+- The template repository is `mjladd/csound-min-template`.
+- Two changes below differ from the first version of this plan. The first
+  piece uses synthesis alone, and the template has no render workflow. The
+  text of steps 5 and 6 says why.
 
 ## Goal
 
@@ -72,6 +81,8 @@ engine container.
    `alsa-utils`, `pulseaudio-utils` and `python3`.
 2. Install `libasound2-plugins`. The engine container lacks it, and without
    it ALSA cannot use the `pulse` device that `/etc/asound.conf` names.
+   Install `git-lfs` as well, because a music project keeps its samples in
+   Git LFS.
 3. Copy the same `/etc/asound.conf` and `/etc/pulse/client.conf` as the
    engine container.
 4. Copy the release archive from the build context and install it into
@@ -131,10 +142,10 @@ page of the repository.
   audio/devcontainer.json    host audio, as in csound-min
 .gitattributes               Git LFS rules for samples/
 .gitignore                   renders/
-pieces/hello.csd             a first piece that reads a sample
+pieces/hello.csd             a first piece, made with synthesis
 samples/README.md            where samples go, and how LFS stores them
 analysis/make.sh             makes every analysis file from samples/
-include/                     shared instrument code for #include
+include/tone.orc             shared instrument code for #include
 README.md                    the steps in part 2
 ```
 
@@ -160,17 +171,23 @@ The `devcontainer.json`:
 The `<CsOptions>` block of `hello.csd` must not contain `-odac`. The template
 renders to a file by default.
 
+The first piece makes its sound with synthesis, and it reads no sample. A
+sample in the template is a binary file that every project then carries, and
+few projects want it. The piece uses `#include "tone.orc"` instead, which
+shows the search path in the same way.
+
 Test: create a repository from the template, open it in a dev container, and
 run `csd render pieces/hello.csd`. Do the same in a GitHub Codespace.
 
 ### 6. Keep the template current
 
-1. Add a step to the release workflow that opens a pull request on the
-   template to change the image tag. Or change the tag by hand after each
-   release.
-2. Add a workflow to the template that renders every file in `pieces/` in the
-   image. A user gets this workflow with the template, and it then renders
-   their own pieces on each push.
+Add a step to the release workflow that opens a pull request on the template
+to change the image tag. Or change the tag by hand after each release.
+
+The template held a render workflow at first, which rendered every file in
+`pieces/` on each push. It is out again. A piece renders in the container in
+a moment, so a run for each push added little. The workflow also kept the
+image tag in a second file.
 
 ### 7. Documentation
 
